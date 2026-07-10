@@ -14,18 +14,27 @@ interface LogoProps {
     onLoginPage?: boolean;
 }
 
-function LogoInternal({ className }: { className?: string }) {
-  const { state } = useSidebar();
+const useCompanyInfo = () => {
   const [companyInfo, setCompanyInfo] = React.useState<CompanyInfo | null>(null);
 
   React.useEffect(() => {
     const fetchCompanyInfo = async () => {
-        const info = await getCompanyInfo();
-        setCompanyInfo(info);
+        try {
+          const info = await getCompanyInfo();
+          setCompanyInfo(info);
+        } catch {
+          setCompanyInfo(null);
+        }
     };
 
     fetchCompanyInfo();
   }, []);
+
+  return companyInfo;
+};
+
+function LogoInternal({ className, companyInfo }: { className?: string; companyInfo: CompanyInfo | null }) {
+  const { state } = useSidebar();
 
   return (
     <div className={cn('flex items-center gap-3 text-primary transition-all duration-200 group-data-[collapsible=icon]/sidebar-wrapper:justify-center', className)}>
@@ -45,16 +54,7 @@ function LogoInternal({ className }: { className?: string }) {
 
 
 export function Logo({ className, onLoginPage = false }: LogoProps) {
-  const [companyInfo, setCompanyInfo] = React.useState<CompanyInfo | null>(null);
-
-  React.useEffect(() => {
-    const fetchCompanyInfo = async () => {
-        const info = await getCompanyInfo();
-        setCompanyInfo(info);
-    };
-
-    fetchCompanyInfo();
-  }, []);
+  const companyInfo = useCompanyInfo();
   
   if (onLoginPage) {
     return (
@@ -72,5 +72,5 @@ export function Logo({ className, onLoginPage = false }: LogoProps) {
   }
 
   // Only call useSidebar when not on login page
-  return <LogoInternal className={className} />;
+  return <LogoInternal className={className} companyInfo={companyInfo} />;
 }

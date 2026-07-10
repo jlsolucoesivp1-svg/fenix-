@@ -3,7 +3,7 @@
 
 import * as React from 'react';
 import type { User } from '@/types';
-import { getLoggedInUser } from '@/lib/storage';
+import { getLoggedInUser, invalidateLoggedInUserCache } from '@/lib/storage';
 
 interface AuthState {
   user: User | null;
@@ -27,15 +27,19 @@ export function useCurrentUser(): AuthState {
 
   React.useEffect(() => {
     checkUser();
-    
-    // Listen for custom storage event to re-check user
-    window.addEventListener('storage-change', checkUser);
+
+    const handleUserStateChange = () => {
+      invalidateLoggedInUserCache();
+      void checkUser();
+    };
+
+    window.addEventListener('auth-change', handleUserStateChange);
     // Also listen for the standard storage event for cross-tab sync
-    window.addEventListener('storage', checkUser);
+    window.addEventListener('storage', handleUserStateChange);
     
     return () => {
-      window.removeEventListener('storage-change', checkUser);
-      window.removeEventListener('storage', checkUser);
+      window.removeEventListener('auth-change', handleUserStateChange);
+      window.removeEventListener('storage', handleUserStateChange);
     };
   }, [checkUser]);
 
