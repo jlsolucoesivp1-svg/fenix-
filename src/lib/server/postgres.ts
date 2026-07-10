@@ -5,66 +5,97 @@ declare global {
   // eslint-disable-next-line no-var
   var __fenixPgPool: Pool | undefined;
   // eslint-disable-next-line no-var
-  var __fenixPgSchemaReady: Promise<void> | undefined;
+  var __fenixServerCache: Map<string, { expiresAt: number; value: unknown }> | undefined;
 }
 
 const connectionString = process.env.DATABASE_URL;
+const sslMode = process.env.PGSSL?.toLowerCase() ?? 'require';
+const SERVER_CACHE_TTL_MS = 10_000;
 
-if (!connectionString) {
-  console.warn('DATABASE_URL nao configurada. As rotas de persistencia com PostgreSQL vao falhar ate a variavel ser definida.');
-}
+const getSslConfig = () => {
+  if (sslMode === 'disable') {
+    return undefined;
+  }
 
-export const pgPool =
-  global.__fenixPgPool ??
-  new Pool({
-    connectionString,
-    ssl: process.env.PGSSL === 'require' ? { rejectUnauthorized: false } : undefined,
-  });
+  return { rejectUnauthorized: false };
+};
 
-if (!global.__fenixPgPool) {
-  global.__fenixPgPool = pgPool;
-}
-
-const ensureSchemaInternal = async () => {
+const getPgPool = (): Pool => {
   if (!connectionString) {
     throw new Error('DATABASE_URL nao configurada.');
   }
 
-  await pgPool.query(`
-    CREATE TABLE IF NOT EXISTS app_records (
-      collection TEXT NOT NULL,
-      record_id TEXT NOT NULL,
-      data JSONB NOT NULL,
-      updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
-      PRIMARY KEY (collection, record_id)
-    );
-  `);
+  if (!global.__fenixPgPool) {
+    global.__fenixPgPool = new Pool({
+      connectionString,
+      ssl: getSslConfig(),
+    });
+  }
 
-  await pgPool.query(`
-    CREATE TABLE IF NOT EXISTS app_singletons (
-      collection TEXT PRIMARY KEY,
-      data JSONB NOT NULL,
-      updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
-    );
-  `);
-
-  await pgPool.query(`
-    CREATE INDEX IF NOT EXISTS idx_app_records_users_login
-    ON app_records ((data->>'login'))
-    WHERE collection = 'users';
-  `);
+  return global.__fenixPgPool;
 };
 
-export const ensureSchema = async () => {
-  if (!global.__fenixPgSchemaReady) {
-    global.__fenixPgSchemaReady = ensureSchemaInternal();
+const getServerCache = () => {
+  if (!global.__fenixServerCache) {
+    global.__fenixServerCache = new Map();
   }
-  return global.__fenixPgSchemaReady;
+
+  return global.__fenixServerCache;
+};
+
+const readCache = <T>(key: string): T | undefined => {
+  const entry = getServerCache().get(key);
+  if (!entry) {
+    return undefined;
+  }
+
+  if (entry.expiresAt <= Date.now()) {
+    getServerCache().delete(key);
+    return undefined;
+  }
+
+  return entry.value as T;
+};
+
+const writeCache = <T>(key: string, value: T, ttlMs = SERVER_CACHE_TTL_MS): T => {
+  getServerCache().set(key, {
+    value,
+    expiresAt: Date.now() + ttlMs,
+  });
+  return value;
+};
+
+const invalidateCacheKey = (key: string) => {
+  getServerCache().delete(key);
+};
+
+const invalidateCollectionCaches = (dataType: CollectionDataType) => {
+  invalidateCacheKey(`collection:${dataType}`);
+
+  if (dataType === 'users') {
+    invalidateCacheKey('users:count');
+    for (const key of getServerCache().keys()) {
+      if (key.startsWith('user:id:') || key.startsWith('user:login:')) {
+        invalidateCacheKey(key);
+      }
+    }
+  }
+
+  if (dataType === 'customers') {
+    for (const key of getServerCache().keys()) {
+      if (key.startsWith('customers:search:')) {
+        invalidateCacheKey(key);
+      }
+    }
+  }
+};
+
+const invalidateSingletonCache = (dataType: SingletonDataType) => {
+  invalidateCacheKey(`singleton:${dataType}`);
 };
 
 export const withTransaction = async <T>(callback: (client: PoolClient) => Promise<T>): Promise<T> => {
-  await ensureSchema();
-  const client = await pgPool.connect();
+  const client = await getPgPool().connect();
   try {
     await client.query('BEGIN');
     const result = await callback(client);
@@ -79,8 +110,23 @@ export const withTransaction = async <T>(callback: (client: PoolClient) => Promi
 };
 
 export const listCollection = async <T>(dataType: CollectionDataType): Promise<T[]> => {
-  await ensureSchema();
-  const result = await pgPool.query<{ data: T }>(
+  const cached = readCache<T[]>(`collection:${dataType}`);
+  if (cached !== undefined) {
+    return cached;
+  }
+
+  const result = await getPgPool().query<{ data: T }>(
+    `SELECT data FROM app_records WHERE collection = $1 ORDER BY updated_at DESC, record_id ASC`,
+    [dataType]
+  );
+  return writeCache(
+    `collection:${dataType}`,
+    result.rows.map((row: { data: T }) => row.data)
+  );
+};
+
+export const listCollectionWithClient = async <T>(client: PoolClient, dataType: CollectionDataType): Promise<T[]> => {
+  const result = await client.query<{ data: T }>(
     `SELECT data FROM app_records WHERE collection = $1 ORDER BY updated_at DESC, record_id ASC`,
     [dataType]
   );
@@ -89,33 +135,90 @@ export const listCollection = async <T>(dataType: CollectionDataType): Promise<T
 
 export const replaceCollection = async <T extends Record<string, unknown>>(dataType: CollectionDataType, records: T[]): Promise<void> => {
   await withTransaction(async (client) => {
-    await client.query(`DELETE FROM app_records WHERE collection = $1`, [dataType]);
-
-    for (const record of records) {
-      const recordId = getRecordId(dataType, record);
-      await client.query(
-        `
-          INSERT INTO app_records (collection, record_id, data, updated_at)
-          VALUES ($1, $2, $3::jsonb, NOW())
-        `,
-        [dataType, recordId, JSON.stringify(record)]
-      );
-    }
+    await replaceCollectionWithClient(client, dataType, records);
   });
 };
 
+export const replaceCollectionWithClient = async <T extends Record<string, unknown>>(
+  client: PoolClient,
+  dataType: CollectionDataType,
+  records: T[]
+): Promise<void> => {
+  await client.query(`DELETE FROM app_records WHERE collection = $1`, [dataType]);
+
+  for (const record of records) {
+    const recordId = getRecordId(dataType, record);
+    await client.query(
+      `
+        INSERT INTO app_records (collection, record_id, data, updated_at)
+        VALUES ($1, $2, $3::jsonb, NOW())
+      `,
+      [dataType, recordId, JSON.stringify(record)]
+    );
+  }
+
+  invalidateCollectionCaches(dataType);
+};
+
+export const upsertCollectionRecord = async <T extends Record<string, unknown>>(
+  dataType: CollectionDataType,
+  record: T
+): Promise<void> => {
+  await withTransaction(async (client) => {
+    await upsertCollectionRecordWithClient(client, dataType, record);
+  });
+};
+
+export const upsertCollectionRecordWithClient = async <T extends Record<string, unknown>>(
+  client: PoolClient,
+  dataType: CollectionDataType,
+  record: T
+): Promise<void> => {
+  const recordId = getRecordId(dataType, record);
+  await client.query(
+    `
+      INSERT INTO app_records (collection, record_id, data, updated_at)
+      VALUES ($1, $2, $3::jsonb, NOW())
+      ON CONFLICT (collection, record_id)
+      DO UPDATE SET data = EXCLUDED.data, updated_at = NOW()
+    `,
+    [dataType, recordId, JSON.stringify(record)]
+  );
+
+  invalidateCollectionCaches(dataType);
+};
+
+export const deleteCollectionRecordWithClient = async (
+  client: PoolClient,
+  dataType: CollectionDataType,
+  recordId: string
+): Promise<void> => {
+  await client.query(
+    `
+      DELETE FROM app_records
+      WHERE collection = $1 AND record_id = $2
+    `,
+    [dataType, recordId]
+  );
+
+  invalidateCollectionCaches(dataType);
+};
+
 export const getSingleton = async <T>(dataType: SingletonDataType): Promise<T | null> => {
-  await ensureSchema();
-  const result = await pgPool.query<{ data: T }>(
+  const cached = readCache<T | null>(`singleton:${dataType}`);
+  if (cached !== undefined) {
+    return cached;
+  }
+
+  const result = await getPgPool().query<{ data: T }>(
     `SELECT data FROM app_singletons WHERE collection = $1`,
     [dataType]
   );
-  return result.rows[0]?.data ?? null;
+  return writeCache(`singleton:${dataType}`, result.rows[0]?.data ?? null);
 };
 
 export const saveSingleton = async <T>(dataType: SingletonDataType, data: T): Promise<void> => {
-  await ensureSchema();
-  await pgPool.query(
+  await getPgPool().query(
     `
       INSERT INTO app_singletons (collection, data, updated_at)
       VALUES ($1, $2::jsonb, NOW())
@@ -124,25 +227,37 @@ export const saveSingleton = async <T>(dataType: SingletonDataType, data: T): Pr
     `,
     [dataType, JSON.stringify(data)]
   );
+  invalidateSingletonCache(dataType);
 };
 
 export const getUserByLogin = async <T>(login: string): Promise<T | null> => {
-  await ensureSchema();
-  const result = await pgPool.query<{ data: T }>(
+  const normalizedLogin = login.trim().toLowerCase();
+  const cacheKey = `user:login:${normalizedLogin}`;
+  const cached = readCache<T | null>(cacheKey);
+  if (cached !== undefined) {
+    return cached;
+  }
+
+  const result = await getPgPool().query<{ data: T }>(
     `
       SELECT data
       FROM app_records
-      WHERE collection = 'users' AND data->>'login' = $1
+      WHERE collection = 'users' AND lower(trim(data->>'login')) = $1
       LIMIT 1
     `,
-    [login]
+    [normalizedLogin]
   );
-  return result.rows[0]?.data ?? null;
+  return writeCache(cacheKey, result.rows[0]?.data ?? null);
 };
 
 export const getUserById = async <T>(userId: string): Promise<T | null> => {
-  await ensureSchema();
-  const result = await pgPool.query<{ data: T }>(
+  const cacheKey = `user:id:${userId}`;
+  const cached = readCache<T | null>(cacheKey);
+  if (cached !== undefined) {
+    return cached;
+  }
+
+  const result = await getPgPool().query<{ data: T }>(
     `
       SELECT data
       FROM app_records
@@ -151,15 +266,66 @@ export const getUserById = async <T>(userId: string): Promise<T | null> => {
     `,
     [userId]
   );
-  return result.rows[0]?.data ?? null;
+  return writeCache(cacheKey, result.rows[0]?.data ?? null);
 };
 
 export const countUsers = async (): Promise<number> => {
-  await ensureSchema();
-  const result = await pgPool.query<{ count: string }>(
+  const cached = readCache<number>('users:count');
+  if (cached !== undefined) {
+    return cached;
+  }
+
+  const result = await getPgPool().query<{ count: string }>(
     `SELECT COUNT(*)::text AS count FROM app_records WHERE collection = 'users'`
   );
-  return Number(result.rows[0]?.count ?? '0');
+  return writeCache('users:count', Number(result.rows[0]?.count ?? '0'));
+};
+
+type CustomerSearchRow = {
+  id: string;
+  name: string;
+  phone: string;
+};
+
+export const searchCustomersByName = async (
+  name: string,
+  limit = 10
+): Promise<CustomerSearchRow[]> => {
+  const trimmedName = name.trim().toLowerCase();
+  if (!trimmedName) {
+    return [];
+  }
+
+  const safeLimit = Math.min(Math.max(limit, 1), 15);
+  const cacheKey = `customers:search:${safeLimit}:${trimmedName}`;
+  const cached = readCache<CustomerSearchRow[]>(cacheKey);
+  if (cached !== undefined) {
+    return cached;
+  }
+
+  const result = await getPgPool().query<CustomerSearchRow>(
+    `
+      SELECT
+        record_id AS id,
+        COALESCE(data->>'name', '') AS name,
+        COALESCE(data->>'phone', '') AS phone
+      FROM app_records
+      WHERE collection = 'customers'
+        AND lower(COALESCE(data->>'name', '')) LIKE '%' || $2 || '%'
+      ORDER BY
+        CASE
+          WHEN lower(COALESCE(data->>'name', '')) LIKE $2 || '%' THEN 0
+          ELSE 1
+        END ASC,
+        POSITION($2 IN lower(COALESCE(data->>'name', ''))) ASC,
+        char_length(COALESCE(data->>'name', '')) ASC,
+        lower(COALESCE(data->>'name', '')) ASC
+      LIMIT $1
+    `,
+    [safeLimit, trimmedName]
+  );
+
+  return writeCache(cacheKey, result.rows);
 };
 
 type BackupRecordRow = {
@@ -176,17 +342,15 @@ type BackupSingletonRow = {
 const escapeSqlLiteral = (value: string): string => value.replace(/'/g, "''");
 
 export const exportSqlSnapshot = async (): Promise<string> => {
-  await ensureSchema();
-
   const [recordsResult, singletonsResult] = await Promise.all([
-    pgPool.query<BackupRecordRow>(
+    getPgPool().query<BackupRecordRow>(
       `
         SELECT collection, record_id, data
         FROM app_records
         ORDER BY collection ASC, updated_at ASC, record_id ASC
       `
     ),
-    pgPool.query<BackupSingletonRow>(
+    getPgPool().query<BackupSingletonRow>(
       `
         SELECT collection, data
         FROM app_singletons
@@ -199,9 +363,6 @@ export const exportSqlSnapshot = async (): Promise<string> => {
     '-- Assistec Now PostgreSQL backup',
     `-- Created at ${new Date().toISOString()}`,
     'BEGIN;',
-    'CREATE TABLE IF NOT EXISTS app_records (collection TEXT NOT NULL, record_id TEXT NOT NULL, data JSONB NOT NULL, updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW(), PRIMARY KEY (collection, record_id));',
-    'CREATE TABLE IF NOT EXISTS app_singletons (collection TEXT PRIMARY KEY, data JSONB NOT NULL, updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW());',
-    "CREATE INDEX IF NOT EXISTS idx_app_records_users_login ON app_records ((data->>'login')) WHERE collection = 'users';",
     'TRUNCATE TABLE app_records, app_singletons;',
   ];
 

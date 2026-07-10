@@ -10,7 +10,6 @@ import {
   MessageCircle,
   Trash2,
   FileSignature,
-  Search,
   Pencil,
   GitBranchPlus,
   ReceiptText,
@@ -35,7 +34,6 @@ import {
   DropdownMenuSubTrigger,
   DropdownMenuTrigger,
 } from '@/components/ui/dropdown-menu';
-import { Input } from '@/components/ui/input';
 import {
   Select,
   SelectContent,
@@ -57,12 +55,16 @@ import {
   AlertDialogTrigger,
 } from '@/components/ui/alert-dialog';
 import {
+  atualizarStatusOrdemServico,
+  excluirOrdemServico,
+  finalizarOrdemServico,
   getCustomers,
   getServiceOrderViewMetadata,
   getServiceOrders,
   getStock,
   getFinancialTransactions,
   markServiceOrderAsViewed,
+  salvarOrdemServicoComEstoque,
   saveFinancialTransactions,
   saveServiceOrders,
   saveStock,
@@ -73,9 +75,13 @@ import { NewOrderSheet } from '@/components/service-orders/new-order-sheet';
 import { AddPaymentDialog } from '@/components/service-orders/add-payment-dialog';
 import { ViewCommentsDialog } from '@/components/service-orders/view-comments-dialog';
 import { cn } from '@/lib/utils';
+import { syncServiceOrderStock } from '@/lib/service-order-stock';
+import { upsertServiceOrderFinalizationTransaction } from '@/lib/service-order-financial';
+import { formatServiceOrderNumber } from '@/lib/service-order-id';
 import Link from 'next/link';
 import { useToast } from '@/hooks/use-toast';
-import { generateOsPdf } from '@/lib/pdf-generators/os-pdf-generator';
+import { generateOsPdf, type OsPdfDocumentType } from '@/lib/pdf-generators/os-pdf-generator';
+import { DebouncedSearchInput } from '@/components/ui/debounced-search-input';
 
 const formatDate = (dateString: string | undefined) => {
   if (!dateString || isNaN(new Date(dateString).getTime())) {
@@ -89,8 +95,8 @@ const formatDate = (dateString: string | undefined) => {
 
 const allStatuses: ServiceOrder['status'][] = [
   'Aberta',
-  'Em análise',
-  'Aguardando peça',
+  'Em an\u00e1lise',
+  'Aguardando pe\u00e7a',
   'Aprovado',
   'Em conserto',
   'Aguardando Pagamento',
@@ -100,14 +106,27 @@ const allStatuses: ServiceOrder['status'][] = [
 ];
 
 const printActions: Array<{
-  documentType: 'invoice' | 'quote' | 'delivery';
+  documentType: OsPdfDocumentType;
   label: string;
   icon: typeof ClipboardList;
 }> = [
-  { documentType: 'invoice', label: 'Imprimir Ordem de Servico', icon: ClipboardList },
+  { documentType: 'service-order', label: 'Imprimir Ordem de Serviço', icon: ClipboardList },
   { documentType: 'quote', label: 'Imprimir Orcamento', icon: FileSignature },
-  { documentType: 'delivery', label: 'Imprimir Recibo de Entrega', icon: ReceiptText },
+  { documentType: 'delivery-receipt', label: 'Imprimir Recibo de Entrega', icon: ReceiptText },
+  { documentType: 'invoice', label: 'Imprimir Fatura', icon: ReceiptText },
 ];
+
+const compareOrdersForList = (a: ServiceOrder, b: ServiceOrder) => {
+  if (a.status === 'Aberta' && b.status !== 'Aberta') {
+    return -1;
+  }
+
+  if (a.status !== 'Aberta' && b.status === 'Aberta') {
+    return 1;
+  }
+
+  return new Date(b.date).getTime() - new Date(a.date).getTime();
+};
 
 function ServiceOrdersComponent() {
   const searchParams = useSearchParams();
@@ -314,7 +333,46 @@ function ServiceOrdersComponent() {
   };
 
   const handleSaveOrder = async (savedOrder: ServiceOrder) => {
+    const orderExistsInState = orders.some((order) => order.id === savedOrder.id);
+
+    try {
+      const result = await salvarOrdemServicoComEstoque({ serviceOrder: savedOrder });
+      const nextOrders = orderExistsInState
+        ? orders.map((order) => (order.id === result.order.id ? result.order : order))
+        : [result.order, ...orders];
+      const sortedOrders = [...nextOrders].sort((a, b) => new Date(b.date).getTime() - new Date(a.date).getTime());
+
+      setOrders(sortedOrders);
+      handleSheetOpenChange(false);
+
+      toast({
+        title: orderExistsInState ? 'Ordem de ServiÃ§o Atualizada!' : 'Ordem de ServiÃ§o Salva!',
+        description: orderExistsInState
+          ? 'Os dados da OS foram salvos com sucesso.'
+          : 'A nova ordem de serviÃ§o foi registrada com sucesso.',
+      });
+      return;
+    } catch (error) {
+      const canFallback =
+        error instanceof Error &&
+        (
+          error.message.includes('Falha na requisicao: 404') ||
+          error.message.includes('Falha na requisicao: 405') ||
+          error.message.includes('Failed to fetch')
+        );
+
+      if (!canFallback) {
+        toast({
+          variant: 'destructive',
+          title: 'Erro ao salvar OS',
+          description: error instanceof Error ? error.message : 'Nao foi possivel salvar a ordem de servico.',
+        });
+        return;
+      }
+    }
+
     const orderExists = orders.some((order) => order.id === savedOrder.id);
+    const previousOrder = orders.find((order) => order.id === savedOrder.id);
     const finalOrder = { ...savedOrder };
 
     if (finalOrder.status === 'Entregue' && !finalOrder.deliveredDate) {
@@ -323,15 +381,33 @@ function ServiceOrdersComponent() {
       delete finalOrder.deliveredDate;
     }
 
+    const currentStock = await getStock();
+    const stockSyncResult = syncServiceOrderStock({
+      currentStock,
+      previousItems: previousOrder?.items || [],
+      nextItems: finalOrder.items || [],
+    });
+
+    if (!stockSyncResult.ok) {
+      toast({
+        variant: 'destructive',
+        title: 'Erro ao sincronizar estoque',
+        description: stockSyncResult.error,
+      });
+      return;
+    }
+
     const updatedOrders = orderExists
       ? orders.map((order) => (order.id === finalOrder.id ? finalOrder : order))
       : [finalOrder, ...orders];
 
     const sortedOrders = updatedOrders.sort((a, b) => new Date(b.date).getTime() - new Date(a.date).getTime());
 
+    await saveStock(stockSyncResult.updatedStock);
     await saveServiceOrders(sortedOrders);
     setOrders(sortedOrders);
     window.dispatchEvent(new Event('storage-change-serviceOrders'));
+    window.dispatchEvent(new Event('storage-change-stock'));
     handleSheetOpenChange(false);
 
     toast({
@@ -343,59 +419,82 @@ function ServiceOrdersComponent() {
   };
 
   const handleReopenOrder = async (orderId: string) => {
-    const updatedOrders = orders.map((order) => (order.id === orderId ? { ...order, status: 'Aberta' as const } : order));
-
-    await saveServiceOrders(updatedOrders);
-    setOrders(updatedOrders);
-    window.dispatchEvent(new Event('storage-change-serviceOrders'));
+    const result = await atualizarStatusOrdemServico({ orderId, status: 'Aberta' });
+    setOrders((currentOrders) =>
+      currentOrders.map((order) => (order.id === result.order.id ? result.order : order))
+    );
 
     toast({
       title: 'Ordem de Serviço Reaberta!',
-      description: `A OS #${orderId.slice(-4)} foi movida para o status "Aberta".`,
+      description: `A OS #${formatServiceOrderNumber(orderId)} foi movida para o status "Aberta".`,
     });
   };
 
   const handleQuickStatusChange = async (orderId: string, newStatus: ServiceOrder['status']) => {
-    let updatedOrders = orders.map((order) => (order.id === orderId ? { ...order, status: newStatus } : order));
-
-    if (newStatus === 'Entregue') {
-      updatedOrders = updatedOrders.map((order) =>
-        order.id === orderId && !order.deliveredDate ? { ...order, deliveredDate: new Date().toISOString().split('T')[0] } : order
-      );
-    }
-
-    await saveServiceOrders(updatedOrders);
-    setOrders(updatedOrders);
-    window.dispatchEvent(new Event('storage-change-serviceOrders'));
+    const result = await atualizarStatusOrdemServico({ orderId, status: newStatus });
+    setOrders((currentOrders) =>
+      currentOrders.map((order) => (order.id === result.order.id ? result.order : order))
+    );
 
     toast({
       title: 'Status Alterado!',
-      description: `A OS #${orderId.slice(-4)} foi atualizada para "${newStatus}".`,
+      description: `A OS #${formatServiceOrderNumber(orderId)} foi atualizada para "${newStatus}".`,
     });
   };
 
   const handleDeleteOrder = async (orderId: string) => {
+    try {
+      await excluirOrdemServico({ orderId });
+      const updatedOrders = orders.filter((order) => order.id !== orderId);
+      setOrders(updatedOrders);
+
+      toast({
+        title: 'OS ExcluÃ­da com Sucesso!',
+        description: `A OS #${formatServiceOrderNumber(orderId)} foi removida, o estoque e as finanÃ§as foram ajustados.`,
+      });
+      return;
+    } catch (error) {
+      const canFallback =
+        error instanceof Error &&
+        (
+          error.message.includes('Falha na requisicao: 404') ||
+          error.message.includes('Falha na requisicao: 405') ||
+          error.message.includes('Failed to fetch')
+        );
+
+      if (!canFallback) {
+        toast({
+          variant: 'destructive',
+          title: 'Erro ao excluir OS',
+          description: error instanceof Error ? error.message : 'Nao foi possivel excluir a ordem de servico.',
+        });
+        return;
+      }
+    }
+
     const orderToDelete = orders.find((order) => order.id === orderId);
     if (!orderToDelete) {
       return;
     }
 
     if (orderToDelete.items && orderToDelete.items.length > 0) {
-      const partsToReturn = orderToDelete.items.filter((item) => item.type === 'part');
+      const currentStock = await getStock();
+      const stockSyncResult = syncServiceOrderStock({
+        currentStock,
+        previousItems: orderToDelete.items,
+        nextItems: [],
+      });
 
-      if (partsToReturn.length > 0) {
-        const currentStock = await getStock();
-        const updatedStock = [...currentStock];
-
-        partsToReturn.forEach((part) => {
-          const stockItemIndex = updatedStock.findIndex((stockItem) => stockItem.name.toLowerCase() === part.description.toLowerCase());
-          if (stockItemIndex !== -1) {
-            updatedStock[stockItemIndex].quantity += part.quantity;
-          }
+      if (!stockSyncResult.ok) {
+        toast({
+          variant: 'destructive',
+          title: 'Erro ao devolver estoque',
+          description: stockSyncResult.error,
         });
-
-        await saveStock(updatedStock);
+        return;
       }
+
+      await saveStock(stockSyncResult.updatedStock);
     }
 
     const currentTransactions = await getFinancialTransactions();
@@ -412,18 +511,42 @@ function ServiceOrdersComponent() {
 
     toast({
       title: 'OS Excluída com Sucesso!',
-      description: `A OS #${orderId.slice(-4)} foi removida, o estoque e as finanças foram ajustados.`,
+      description: `A OS #${formatServiceOrderNumber(orderId)} foi removida, o estoque e as finanças foram ajustados.`,
     });
   };
 
-  const handlePrint = async (documentType: 'entry' | 'quote' | 'delivery' | 'invoice', order: ServiceOrder) => {
+  const handlePrint = async (documentType: OsPdfDocumentType, order: ServiceOrder) => {
     const customer = customers.find((entry) => entry.id === order.customerId);
     if (!customer) {
       toast({ variant: 'destructive', title: 'Erro', description: 'Cliente da OS não encontrado.' });
       return;
     }
 
-    await generateOsPdf(documentType, order, customer);
+    if (!order.id) {
+      toast({ variant: 'destructive', title: 'Erro', description: 'A OS selecionada n�f£o possui identificador v�f¡lido para impress�f£o.' });
+      return;
+    }
+
+    console.info('[print] Solicitando gera�f§�f£o de documento da OS', {
+      documentType,
+      orderId: order.id,
+      customerId: order.customerId,
+    });
+
+    try {
+      await generateOsPdf(documentType, order, customer);
+    } catch (error) {
+      console.error('[print] Falha ao gerar documento da OS', {
+        documentType,
+        orderId: order.id,
+        error,
+      });
+      toast({
+        variant: 'destructive',
+        title: 'Erro ao imprimir',
+        description: 'N�f£o foi poss�f­vel gerar o documento selecionado. Verifique os dados da OS e tente novamente.',
+      });
+    }
   };
 
   const handleOpenFinalizeDialog = (order: ServiceOrder) => {
@@ -436,16 +559,47 @@ function ServiceOrdersComponent() {
     setFinalizingOrder(null);
   };
 
-  const handleFinalizeSave = async (orderId: string, newPayments: OSPayment[], newTransactions: FinancialTransaction[]) => {
+  const shouldUseLegacyFinalizeOrderFallback = (error: unknown) => {
+    if (!(error instanceof Error)) {
+      return false;
+    }
+
+    return (
+      error.message.includes('Falha na requisicao: 404') ||
+      error.message.includes('Falha na requisicao: 405') ||
+      error.message.includes('Failed to fetch')
+    );
+  };
+
+  const handleFinalizeSaveLegacy = async ({
+    orderId,
+    newPayments,
+    newTransactions,
+    nextStatus,
+    deliveredDate,
+  }: {
+    orderId: string;
+    newPayments: OSPayment[];
+    newTransactions: FinancialTransaction[];
+    nextStatus?: ServiceOrder['status'];
+    deliveredDate?: string;
+  }) => {
     const currentTransactions = await getFinancialTransactions();
-    await saveFinancialTransactions([...newTransactions, ...currentTransactions]);
+    const mergedTransactions = newTransactions.reduce(
+      (transactions, transaction) =>
+        transaction.origin === 'service-order-finalization'
+          ? upsertServiceOrderFinalizationTransaction(transactions, transaction)
+          : [transaction, ...transactions],
+      currentTransactions
+    );
+    await saveFinancialTransactions(mergedTransactions);
 
     const updatedOrders = orders.map((order) =>
       order.id === orderId
         ? {
             ...order,
-            status: 'Finalizado' as const,
-            deliveredDate: new Date().toISOString().split('T')[0],
+            status: nextStatus || 'Finalizado',
+            deliveredDate: deliveredDate || new Date().toISOString().split('T')[0],
             payments: [...(order.payments || []), ...newPayments],
           }
         : order
@@ -458,11 +612,69 @@ function ServiceOrdersComponent() {
     window.dispatchEvent(new Event('storage-change-financialTransactions'));
 
     toast({
-      title: 'Ordem Finalizada!',
-      description: `A OS #${orderId.slice(-4)} foi finalizada e o financeiro atualizado.`,
+      title: nextStatus === 'Aguardando Pagamento' ? 'OS aguardando pagamento!' : 'Ordem Finalizada!',
+      description:
+        nextStatus === 'Aguardando Pagamento'
+          ? `A OS #${formatServiceOrderNumber(orderId)} foi concluída com lançamento pendente no financeiro.`
+          : `A OS #${formatServiceOrderNumber(orderId)} foi finalizada e o financeiro atualizado.`,
     });
 
     handleCloseFinalizeDialog();
+  };
+
+  const handleFinalizeSave = async ({
+    orderId,
+    newPayments,
+    newTransactions,
+    nextStatus,
+    deliveredDate,
+  }: {
+    orderId: string;
+    newPayments: OSPayment[];
+    newTransactions: FinancialTransaction[];
+    nextStatus?: ServiceOrder['status'];
+    deliveredDate?: string;
+  }) => {
+    try {
+      const result = await finalizarOrdemServico({
+        orderId,
+        newPayments,
+        newTransactions,
+        nextStatus,
+        deliveredDate,
+      });
+
+      setOrders((currentOrders) =>
+        currentOrders.map((order) => (order.id === result.order.id ? result.order : order))
+      );
+
+      toast({
+        title: nextStatus === 'Aguardando Pagamento' ? 'OS aguardando pagamento!' : 'Ordem Finalizada!',
+        description:
+          nextStatus === 'Aguardando Pagamento'
+            ? `A OS #${formatServiceOrderNumber(orderId)} foi concluÃ­da com lanÃ§amento pendente no financeiro.`
+            : `A OS #${formatServiceOrderNumber(orderId)} foi finalizada e o financeiro atualizado.`,
+      });
+
+      handleCloseFinalizeDialog();
+    } catch (error) {
+      if (shouldUseLegacyFinalizeOrderFallback(error)) {
+        await handleFinalizeSaveLegacy({
+          orderId,
+          newPayments,
+          newTransactions,
+          nextStatus,
+          deliveredDate,
+        });
+        return;
+      }
+
+      toast({
+        variant: 'destructive',
+        title: 'Erro ao finalizar OS',
+        description: error instanceof Error ? error.message : 'Nao foi possivel finalizar a ordem de servico.',
+      });
+    }
   };
 
   const handleNotifyCustomer = React.useCallback(() => {
@@ -499,7 +711,7 @@ function ServiceOrdersComponent() {
       });
     }
 
-    return result;
+    return result.sort(compareOrdersForList);
   }, [orders, searchFilter, statusFilter]);
 
   if (isLoading) {
@@ -544,21 +756,19 @@ function ServiceOrdersComponent() {
                 isOpen={isSheetOpen}
                 onOpenChange={handleSheetOpenChange}
                 onSave={handleSaveOrder}
+                onFinalizeRequest={handleOpenFinalizeDialog}
               />
             </div>
           </div>
         </CardHeader>
         <CardContent>
           <div className="mb-4">
-            <div className="relative">
-              <Search className="absolute left-2.5 top-2.5 h-4 w-4 text-muted-foreground" />
-              <Input
-                placeholder="Filtrar por cliente, equipamento ou nº OS..."
-                className="max-w-sm pl-8"
-                value={searchFilter}
-                onChange={(event) => setSearchFilter(event.target.value)}
-              />
-            </div>
+            <DebouncedSearchInput
+              defaultValue={searchFilter}
+              onDebouncedChange={setSearchFilter}
+              placeholder="Filtrar por cliente, equipamento ou n� OS..."
+              className="max-w-sm"
+            />
           </div>
           <Table>
             <TableHeader>
@@ -593,7 +803,7 @@ function ServiceOrdersComponent() {
                             handleEditClick(order);
                           }}
                         >
-                          #{order.id.slice(-4)}
+                          #{formatServiceOrderNumber(order.id)}
                         </Link>
                       </TableCell>
                       <TableCell className="font-medium">{order.customerName}</TableCell>
@@ -774,3 +984,4 @@ export default function ServiceOrdersPage() {
     </React.Suspense>
   );
 }
+
