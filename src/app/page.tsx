@@ -17,8 +17,13 @@ import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
 import { Logo } from '@/components/logo';
 import { useToast } from '@/hooks/use-toast';
-import { getLoggedInUser, hasRegisteredUsers, registerUser, signInWithLoginAndPassword } from '@/lib/storage';
-import type { SystemActivation } from '@/types';
+import {
+  getCurrentAppSession,
+  hasRegisteredUsers,
+  registerUser,
+  signInWithLoginAndPassword,
+  signInWithSupabaseEmailAndPassword,
+} from '@/lib/storage';
 
 export default function LoginPage() {
   const router = useRouter();
@@ -31,33 +36,32 @@ export default function LoginPage() {
   const [isRegisterOpen, setIsRegisterOpen] = React.useState(false);
   const [hasUsers, setHasUsers] = React.useState(true);
   const [startupError, setStartupError] = React.useState<string | null>(null);
-  const [activation, setActivation] = React.useState<SystemActivation | null>(null);
-  const [serial, setSerial] = React.useState('');
-  const [isActivating, setIsActivating] = React.useState(false);
+  const [startupNotice, setStartupNotice] = React.useState<string | null>(null);
 
   const [newUser, setNewUser] = React.useState({ name: '', login: '', password: '' });
 
   React.useEffect(() => {
     const checkSessionAndUsers = async () => {
       try {
-        const [user, usersExist, activationResponse] = await Promise.all([
-          getLoggedInUser(),
-          hasRegisteredUsers(),
-          fetch('/api/activation', { cache: 'no-store' }),
-        ]);
-
-        if (!activationResponse.ok) {
-          throw new Error('Nao foi possivel verificar a ativacao desta instalacao.');
-        }
-
-        const activationPayload: SystemActivation = await activationResponse.json();
-        setActivation(activationPayload);
+        const [usersExist, session] = await Promise.all([hasRegisteredUsers(), getCurrentAppSession()]);
         setHasUsers(usersExist);
         setStartupError(null);
+        setStartupNotice(null);
 
-        if (user && activationPayload.status === 'active') {
+        if (session.user) {
           router.replace('/dashboard');
           return;
+        }
+
+        if (session.authSource === 'supabase-only' && session.tenantAccess?.canAccessTenant) {
+          router.replace('/clientes');
+          return;
+        }
+
+        if (session.authSource === 'supabase-only') {
+          setStartupNotice(
+            'Sessao Supabase detectada, mas o shell legado continua bloqueado ate concluirmos a integracao SaaS no runtime.'
+          );
         }
       } catch (error: any) {
         setStartupError(error?.message || 'Nao foi possivel conectar ao servidor.');
@@ -69,71 +73,30 @@ export default function LoginPage() {
     checkSessionAndUsers();
   }, [router]);
 
-  const handleActivation = async (event: React.FormEvent) => {
-    event.preventDefault();
-
-    if (!serial.trim()) {
-      toast({
-        variant: 'destructive',
-        title: 'Codigo obrigatorio',
-        description: 'Cole o codigo de ativacao gerado para esta instalacao.',
-      });
-      return;
-    }
-
-    setIsActivating(true);
-    try {
-      const response = await fetch('/api/activation', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ serial: serial.trim() }),
-      });
-
-      const payload = await response.json();
-      if (!response.ok) {
-        throw new Error(payload?.error || 'Nao foi possivel concluir a ativacao.');
-      }
-
-      setActivation(payload.activation);
-      setSerial('');
-      toast({
-        title: 'Sistema ativado',
-        description: 'A instalacao foi liberada. Voce ja pode acessar normalmente.',
-      });
-    } catch (error: any) {
-      toast({
-        variant: 'destructive',
-        title: 'Falha na ativacao',
-        description: error?.message || 'Nao foi possivel validar o codigo informado.',
-      });
-    } finally {
-      setIsActivating(false);
-    }
-  };
-
-  const handleCopyMachineKey = async () => {
-    if (!activation?.machineKey) {
-      return;
-    }
-
-    try {
-      await navigator.clipboard.writeText(activation.machineKey);
-      toast({ title: 'Chave copiada', description: 'Envie a chave para gerar a ativacao no seu ativador externo.' });
-    } catch {
-      toast({
-        variant: 'destructive',
-        title: 'Nao foi possivel copiar',
-        description: 'Copie a chave manualmente.',
-      });
-    }
-  };
-
   const handleLogin = async (e: React.FormEvent) => {
     e.preventDefault();
     setIsLoading(true);
 
     try {
-      const user = await signInWithLoginAndPassword(login, password);
+      const normalizedIdentifier = login.trim();
+
+      if (normalizedIdentifier.includes('@')) {
+        const session = await signInWithSupabaseEmailAndPassword(normalizedIdentifier, password);
+        toast({
+          title: 'Login bem-sucedido!',
+          description: `Bem-vindo, ${session.supabaseUser?.email || normalizedIdentifier}! Redirecionando...`,
+        });
+
+        if (session.tenantAccess?.canAccessTenant) {
+          router.push('/clientes');
+          return;
+        }
+
+        router.push('/admin');
+        return;
+      }
+
+      const user = await signInWithLoginAndPassword(normalizedIdentifier, password);
       toast({
         title: 'Login bem-sucedido!',
         description: `Bem-vindo, ${user.name}! Redirecionando...`,
@@ -185,9 +148,7 @@ export default function LoginPage() {
       <Card className="mx-auto w-full max-w-sm border-border shadow-2xl">
         <CardHeader className="space-y-4 text-center">
           <Logo onLoginPage={true} />
-          {activation?.status !== 'active' ? (
-            <CardTitle className="text-2xl font-bold">Liberacao da instalacao</CardTitle>
-          ) : hasUsers ? (
+          {hasUsers ? (
             <CardTitle className="text-2xl font-bold">Acesse sua conta</CardTitle>
           ) : (
             <CardTitle className="text-2xl font-bold">Crie sua conta de Admin</CardTitle>
@@ -196,53 +157,24 @@ export default function LoginPage() {
             <CardDescription className="text-sm text-destructive">
               {startupError}
             </CardDescription>
+          ) : startupNotice ? (
+            <CardDescription className="text-sm text-amber-600">
+              {startupNotice}
+            </CardDescription>
           ) : null}
         </CardHeader>
         <CardContent>
-          {activation?.status !== 'active' ? (
-            <div className="space-y-4 pt-4">
-              <p className="text-sm text-muted-foreground">
-                Na primeira execucao, copie a chave desta instalacao, gere a ativacao no seu aplicativo externo e cole o codigo abaixo.
-              </p>
-
-              {activation ? (
-                <>
-                  <div className="space-y-2 rounded border border-border bg-muted/50 p-3">
-                    <Label htmlFor="machine-key">Chave desta instalacao</Label>
-                    <Input id="machine-key" value={activation.machineKey} readOnly className="font-mono text-xs" />
-                    <Button type="button" variant="outline" className="w-full" onClick={handleCopyMachineKey}>
-                      Copiar chave
-                    </Button>
-                  </div>
-
-                  <form onSubmit={handleActivation} className="space-y-3">
-                    <div className="space-y-2">
-                      <Label htmlFor="activation-code">Codigo de ativacao</Label>
-                      <Input
-                        id="activation-code"
-                        value={serial}
-                        onChange={(e) => setSerial(e.target.value)}
-                        placeholder="Cole aqui o codigo gerado"
-                        disabled={isActivating}
-                      />
-                    </div>
-                    <Button type="submit" className="w-full" disabled={isActivating}>
-                      {isActivating ? 'Validando...' : 'Liberar sistema'}
-                    </Button>
-                  </form>
-                </>
-              ) : (
-                <p className="text-sm text-muted-foreground">Nao foi possivel carregar a chave desta instalacao.</p>
-              )}
-            </div>
-          ) : hasUsers ? (
+          {hasUsers ? (
             <form onSubmit={handleLogin} className="space-y-4 pt-4">
               <div className="space-y-2">
-                <Label htmlFor="login">Login</Label>
+                <Label htmlFor="login">Login ou E-mail</Label>
                 <Input
                   id="login"
                   type="text"
-                  placeholder="seu.login"
+                  placeholder="seu.login ou email@dominio.com"
+                  autoCapitalize="none"
+                  autoCorrect="off"
+                  spellCheck={false}
                   required
                   value={login}
                   onChange={(e) => setLogin(e.target.value)}
@@ -276,7 +208,16 @@ export default function LoginPage() {
               </div>
               <div className="space-y-2">
                 <Label htmlFor="reg-login">Login de Acesso</Label>
-                <Input id="reg-login" required placeholder="Ex: admin" value={newUser.login} onChange={(e) => setNewUser({ ...newUser, login: e.target.value })} />
+                <Input
+                  id="reg-login"
+                  required
+                  placeholder="Ex: admin"
+                  autoCapitalize="none"
+                  autoCorrect="off"
+                  spellCheck={false}
+                  value={newUser.login}
+                  onChange={(e) => setNewUser({ ...newUser, login: e.target.value })}
+                />
               </div>
               <div className="space-y-2">
                 <Label htmlFor="reg-password">Senha</Label>
@@ -286,7 +227,7 @@ export default function LoginPage() {
             </form>
           )}
         </CardContent>
-        {activation?.status === 'active' && hasUsers && (
+        {hasUsers && (
           <CardFooter className="flex-col gap-4">
             <Dialog open={isRegisterOpen} onOpenChange={setIsRegisterOpen}>
               <DialogTrigger asChild>
