@@ -51,14 +51,14 @@ export function AdminAuditPage({ companies, initialLogs, initialCompanyId }: Adm
         }
       />
 
-      <Card className="border-sky-500/10 bg-white/90 shadow-sm">
+      <Card className="border-border bg-card shadow-sm">
         <CardHeader>
           <CardTitle>Filtro por empresa</CardTitle>
           <CardDescription>Filtre o trilho por empresa afetada ou veja tudo em nivel de plataforma.</CardDescription>
         </CardHeader>
         <CardContent>
           <select
-            className="flex h-10 rounded-md border border-input bg-background px-3 py-2 text-sm lg:min-w-80"
+            className="flex h-10 rounded-md border border-input bg-background px-3 py-2 text-sm text-foreground lg:min-w-80"
             value={selectedCompanyId}
             onChange={(event) => setSelectedCompanyId(event.target.value)}
           >
@@ -72,7 +72,7 @@ export function AdminAuditPage({ companies, initialLogs, initialCompanyId }: Adm
         </CardContent>
       </Card>
 
-      <Card className="border-sky-500/10 bg-white/90 shadow-sm">
+      <Card className="border-border bg-card shadow-sm">
         <CardHeader>
           <CardTitle>Eventos recentes</CardTitle>
           <CardDescription>Sem senhas ou segredos. Apenas metadados operacionais relevantes.</CardDescription>
@@ -93,8 +93,8 @@ export function AdminAuditPage({ companies, initialLogs, initialCompanyId }: Adm
                 <TableRow key={log.id}>
                   <TableCell>{new Date(log.createdAt).toLocaleString('pt-BR')}</TableCell>
                   <TableCell>
-                    <div className="font-medium text-slate-950">{log.action}</div>
-                    <div className="text-xs text-slate-500">{log.requestId || 'sem request_id'}</div>
+                    <div className="font-medium text-foreground">{log.action}</div>
+                    <div className="text-xs text-muted-foreground">{log.requestId || 'sem request_id'}</div>
                   </TableCell>
                   <TableCell>{log.entity}</TableCell>
                   <TableCell className="font-mono text-xs">{log.companyId || 'plataforma'}</TableCell>

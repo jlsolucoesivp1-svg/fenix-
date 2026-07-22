@@ -63,14 +63,14 @@ export function AdminUsersPage({ companies, initialCompanyId }: AdminUsersPagePr
         }
       />
 
-      <Card className="border-sky-500/10 bg-white/90 shadow-sm">
+      <Card className="border-border bg-card shadow-sm">
         <CardHeader>
           <CardTitle>Selecionar empresa</CardTitle>
           <CardDescription>Use o filtro abaixo para carregar os usuarios do tenant desejado.</CardDescription>
         </CardHeader>
         <CardContent className="flex flex-col gap-4 lg:flex-row lg:items-center">
           <select
-            className="flex h-10 rounded-md border border-input bg-background px-3 py-2 text-sm lg:min-w-80"
+            className="flex h-10 rounded-md border border-input bg-background px-3 py-2 text-sm text-foreground lg:min-w-80"
             value={selectedCompanyId}
             onChange={(event) => setSelectedCompanyId(event.target.value)}
           >
@@ -81,14 +81,14 @@ export function AdminUsersPage({ companies, initialCompanyId }: AdminUsersPagePr
             ))}
           </select>
           {selectedCompany ? (
-            <div className="text-sm text-slate-600">
+            <div className="text-sm text-muted-foreground">
               Empresa ativa na tela: <strong>{selectedCompany.tradeName}</strong>
             </div>
           ) : null}
         </CardContent>
       </Card>
 
-      <Card className="border-sky-500/10 bg-white/90 shadow-sm">
+      <Card className="border-border bg-card shadow-sm">
         <CardHeader>
           <CardTitle>Usuarios vinculados</CardTitle>
           <CardDescription>Listagem administrativa para validacao de acesso, owners e status de membership.</CardDescription>
@@ -119,8 +119,8 @@ export function AdminUsersPage({ companies, initialCompanyId }: AdminUsersPagePr
                 {users.map((user) => (
                   <TableRow key={user.id}>
                     <TableCell>
-                      <div className="font-medium text-slate-950">{user.name}</div>
-                      <div className="text-xs text-slate-500">{user.email || user.id}</div>
+                      <div className="font-medium text-foreground">{user.name}</div>
+                      <div className="text-xs text-muted-foreground">{user.email || user.id}</div>
                     </TableCell>
                     <TableCell>{user.login}</TableCell>
                     <TableCell>

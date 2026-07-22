@@ -35,10 +35,10 @@ export function AdminShell({ children, operatorLabel, operatorEmail }: AdminShel
           <AdminUserMenu operatorLabel={operatorLabel} operatorEmail={operatorEmail} />
         </SidebarFooter>
       </Sidebar>
-      <div className="flex min-h-screen flex-1 flex-col bg-[radial-gradient(circle_at_top,_rgba(14,165,233,0.12),_transparent_28%),linear-gradient(180deg,_#f8fbff_0%,_#eef5ff_100%)]">
-        <header className="sticky top-0 z-20 flex h-16 items-center gap-4 border-b border-sky-500/10 bg-white/85 px-4 backdrop-blur md:hidden">
+      <div className="flex min-h-screen flex-1 flex-col bg-background">
+        <header className="sticky top-0 z-20 flex h-16 items-center gap-4 border-b border-border bg-background/95 px-4 text-foreground backdrop-blur md:hidden">
           <SidebarTrigger />
-          <div className="text-sm font-semibold text-slate-900">Painel Administrativo Fenix</div>
+          <div className="text-sm font-semibold">Painel Administrativo Fenix</div>
         </header>
         <SidebarInset className="bg-transparent p-4 md:p-6">{children}</SidebarInset>
       </div>

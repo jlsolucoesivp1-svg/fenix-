@@ -235,7 +235,7 @@ export function AdminCompaniesPage({ initialCompanies }: AdminCompaniesPageProps
         }
       />
 
-      <Card className="border-sky-500/10 bg-white/90 shadow-sm">
+      <Card className="border-border bg-card shadow-sm">
         <CardHeader>
           <CardTitle>Nova empresa</CardTitle>
           <CardDescription>
@@ -244,8 +244,8 @@ export function AdminCompaniesPage({ initialCompanies }: AdminCompaniesPageProps
         </CardHeader>
         <CardContent>
           <form onSubmit={handleCreate} className="grid gap-6 xl:grid-cols-3">
-            <div className="space-y-4 rounded-2xl border border-slate-200 p-4 xl:col-span-1">
-              <div className="font-medium text-slate-950">Dados da empresa</div>
+            <div className="space-y-4 rounded-2xl border border-border bg-muted/30 p-4 xl:col-span-1">
+              <div className="font-medium text-foreground">Dados da empresa</div>
               <div className="space-y-2">
                 <Label htmlFor="companyTradeName">Nome fantasia</Label>
                 <Input id="companyTradeName" value={createForm.companyTradeName} onChange={(e) => handleCreateChange('companyTradeName', e.target.value)} />
@@ -297,7 +297,7 @@ export function AdminCompaniesPage({ initialCompanies }: AdminCompaniesPageProps
                   <Label htmlFor="status">Status</Label>
                   <select
                     id="status"
-                    className="flex h-10 w-full rounded-md border border-input bg-background px-3 py-2 text-sm"
+                    className="flex h-10 w-full rounded-md border border-input bg-background px-3 py-2 text-sm text-foreground"
                     value={createForm.status}
                     onChange={(e) => handleCreateChange('status', e.target.value as CompanyStatus)}
                   >
@@ -310,8 +310,8 @@ export function AdminCompaniesPage({ initialCompanies }: AdminCompaniesPageProps
               </div>
             </div>
 
-            <div className="space-y-4 rounded-2xl border border-slate-200 p-4 xl:col-span-1">
-              <div className="font-medium text-slate-950">Administrador inicial</div>
+            <div className="space-y-4 rounded-2xl border border-border bg-muted/30 p-4 xl:col-span-1">
+              <div className="font-medium text-foreground">Administrador inicial</div>
               <div className="space-y-2">
                 <Label htmlFor="adminFullName">Nome completo</Label>
                 <Input id="adminFullName" value={createForm.adminFullName} onChange={(e) => handleCreateChange('adminFullName', e.target.value)} />
@@ -330,7 +330,7 @@ export function AdminCompaniesPage({ initialCompanies }: AdminCompaniesPageProps
                   <Input id="adminPassword" type="password" value={createForm.adminPassword} onChange={(e) => handleCreateChange('adminPassword', e.target.value)} />
                 </div>
               </div>
-              <label className="flex items-center gap-3 rounded-xl border border-slate-200 px-3 py-3 text-sm text-slate-700">
+              <label className="flex items-center gap-3 rounded-xl border border-border bg-background px-3 py-3 text-sm text-foreground">
                 <input
                   type="checkbox"
                   checked={Boolean(createForm.requirePasswordChange)}
@@ -340,8 +340,8 @@ export function AdminCompaniesPage({ initialCompanies }: AdminCompaniesPageProps
               </label>
             </div>
 
-            <div className="space-y-4 rounded-2xl border border-slate-200 p-4 xl:col-span-1">
-              <div className="font-medium text-slate-950">Configuracoes iniciais</div>
+            <div className="space-y-4 rounded-2xl border border-border bg-muted/30 p-4 xl:col-span-1">
+              <div className="font-medium text-foreground">Configuracoes iniciais</div>
               <div className="grid gap-4 sm:grid-cols-2">
                 <div className="space-y-2">
                   <Label htmlFor="defaultWarrantyDays">Garantia padrao (dias)</Label>
@@ -378,7 +378,7 @@ export function AdminCompaniesPage({ initialCompanies }: AdminCompaniesPageProps
         </CardContent>
       </Card>
 
-      <Card className="border-sky-500/10 bg-white/90 shadow-sm">
+      <Card className="border-border bg-card shadow-sm">
         <CardHeader className="gap-4 lg:flex-row lg:items-center lg:justify-between">
           <div>
             <CardTitle>Empresas cadastradas</CardTitle>
@@ -392,7 +392,7 @@ export function AdminCompaniesPage({ initialCompanies }: AdminCompaniesPageProps
               className="sm:w-72"
             />
             <select
-              className="flex h-10 rounded-md border border-input bg-background px-3 py-2 text-sm"
+              className="flex h-10 rounded-md border border-input bg-background px-3 py-2 text-sm text-foreground"
               value={statusFilter}
               onChange={(e) => setStatusFilter(e.target.value as 'all' | CompanyStatus)}
             >
@@ -421,15 +421,15 @@ export function AdminCompaniesPage({ initialCompanies }: AdminCompaniesPageProps
               {filteredCompanies.map((company) => (
                 <TableRow key={company.companyId}>
                   <TableCell>
-                    <div className="font-medium text-slate-950">{company.tradeName}</div>
-                    <div className="text-xs text-slate-500">{company.slug}</div>
+                    <div className="font-medium text-foreground">{company.tradeName}</div>
+                    <div className="text-xs text-muted-foreground">{company.slug}</div>
                   </TableCell>
                   <TableCell>
                     <Badge variant={getStatusBadgeVariant(company.status)}>{COMPANY_STATUS_LABEL[company.status]}</Badge>
                   </TableCell>
                   <TableCell>
                     <div>{company.responsibleName || 'Nao definido'}</div>
-                    <div className="text-xs text-slate-500">{company.responsibleEmail || company.companyId}</div>
+                    <div className="text-xs text-muted-foreground">{company.responsibleEmail || company.companyId}</div>
                   </TableCell>
                   <TableCell>{company.usersCount}</TableCell>
                   <TableCell>{new Date(company.createdAt).toLocaleDateString('pt-BR')}</TableCell>
@@ -505,7 +505,7 @@ export function AdminCompaniesPage({ initialCompanies }: AdminCompaniesPageProps
               </div>
               <div className="space-y-2">
                 <Label>Status</Label>
-                <select className="flex h-10 w-full rounded-md border border-input bg-background px-3 py-2 text-sm" value={editForm.status} onChange={(e) => handleEditChange('status', e.target.value as CompanyStatus)}>
+                <select className="flex h-10 w-full rounded-md border border-input bg-background px-3 py-2 text-sm text-foreground" value={editForm.status} onChange={(e) => handleEditChange('status', e.target.value as CompanyStatus)}>
                   <option value="trial">Teste</option>
                   <option value="active">Ativa</option>
                   <option value="suspended">Suspensa</option>

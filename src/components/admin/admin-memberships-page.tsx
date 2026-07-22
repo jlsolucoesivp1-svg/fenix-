@@ -54,14 +54,14 @@ export function AdminMembershipsPage({ companies, initialCompanyId }: AdminMembe
         }
       />
 
-      <Card className="border-sky-500/10 bg-white/90 shadow-sm">
+      <Card className="border-border bg-card shadow-sm">
         <CardHeader>
           <CardTitle>Filtro por empresa</CardTitle>
           <CardDescription>Deixe em branco para inspecionar memberships de toda a plataforma.</CardDescription>
         </CardHeader>
         <CardContent className="flex flex-col gap-4 lg:flex-row lg:items-center">
           <select
-            className="flex h-10 rounded-md border border-input bg-background px-3 py-2 text-sm lg:min-w-80"
+            className="flex h-10 rounded-md border border-input bg-background px-3 py-2 text-sm text-foreground lg:min-w-80"
             value={selectedCompanyId}
             onChange={(event) => setSelectedCompanyId(event.target.value)}
           >
@@ -72,14 +72,14 @@ export function AdminMembershipsPage({ companies, initialCompanyId }: AdminMembe
               </option>
             ))}
           </select>
-          <div className="flex items-center gap-2 text-sm text-slate-600">
-            <BadgeCheck className="h-4 w-4 text-sky-700" />
+          <div className="flex items-center gap-2 text-sm text-muted-foreground">
+            <BadgeCheck className="h-4 w-4 text-primary" />
             {memberships.length.toLocaleString('pt-BR')} membership(s) carregadas
           </div>
         </CardContent>
       </Card>
 
-      <Card className="border-sky-500/10 bg-white/90 shadow-sm">
+      <Card className="border-border bg-card shadow-sm">
         <CardHeader>
           <CardTitle>Memberships</CardTitle>
           <CardDescription>Visao administrativa de ownership, default tenant e status do vinculo.</CardDescription>
@@ -100,8 +100,8 @@ export function AdminMembershipsPage({ companies, initialCompanyId }: AdminMembe
               {memberships.map((membership) => (
                 <TableRow key={membership.membershipId}>
                   <TableCell>
-                    <div className="font-medium text-slate-950">{membership.fullName || membership.loginName || membership.userId}</div>
-                    <div className="text-xs text-slate-500">{membership.userId}</div>
+                    <div className="font-medium text-foreground">{membership.fullName || membership.loginName || membership.userId}</div>
+                    <div className="text-xs text-muted-foreground">{membership.userId}</div>
                   </TableCell>
                   <TableCell>{membership.email || 'Nao informado'}</TableCell>
                   <TableCell>

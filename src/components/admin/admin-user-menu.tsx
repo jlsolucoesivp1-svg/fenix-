@@ -37,7 +37,7 @@ export function AdminUserMenu({ operatorLabel, operatorEmail }: AdminUserMenuPro
       </div>
       <Button
         variant="ghost"
-        className="mt-3 w-full justify-start text-sky-50 hover:bg-sky-500/10 hover:text-white"
+        className="mt-3 w-full justify-start text-sky-50 hover:bg-sky-500/10 hover:text-sky-50"
         onClick={handleLogout}
       >
         <LogOut className="mr-2 h-4 w-4" />
