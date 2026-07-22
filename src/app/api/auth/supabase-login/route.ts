@@ -7,6 +7,7 @@ import {
 } from '@/lib/server/supabase-session';
 import { getSupabaseUserConfig } from '@/lib/server/supabase-user';
 import { getSaasUserPermissions } from '@/lib/server/saas-users';
+import { findPlatformAdminForSession } from '@/lib/server/superadmin';
 
 type SupabasePasswordGrantResponse = {
   access_token?: string;
@@ -81,13 +82,19 @@ export async function POST(request: Request) {
         ? await getSaasUserPermissions(supabaseSession.tenantAccess.activeCompanyId, supabaseSession.user.id)
         : null;
 
-    return NextResponse.json({
+    const appSession = {
       user: null,
-      authSource: 'supabase-only',
+      authSource: 'supabase-only' as const,
       tenantContext: supabaseSession.tenantContext,
       supabaseUser: supabaseSession.user,
       tenantAccess: supabaseSession.tenantAccess,
       effectivePermissions,
+    };
+    const isPlatformAdmin = Boolean(await findPlatformAdminForSession(appSession));
+
+    return NextResponse.json({
+      ...appSession,
+      isPlatformAdmin,
     });
   } catch (error) {
     console.error('Erro no login Supabase:', error);

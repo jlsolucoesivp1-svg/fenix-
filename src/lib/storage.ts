@@ -112,6 +112,7 @@ const clearCurrentUserCache = () => {
 
 type ClientAppSession = AppSessionSnapshot & {
   user: User | null;
+  isPlatformAdmin: boolean;
 };
 
 type BootstrapSaasInput = {
@@ -425,6 +426,7 @@ export const signInWithLoginAndPassword = async (login: string, password: string
       supabaseUser: null,
       tenantAccess: null,
       effectivePermissions: payload.user.permissions,
+      isPlatformAdmin: false,
     };
   currentAppSessionCacheExpiresAt = Date.now() + SESSION_CACHE_TTL_MS;
   currentAppSessionRequest = null;
@@ -482,6 +484,7 @@ export const getCurrentAppSession = async (): Promise<ClientAppSession> => {
       supabaseUser: null,
       tenantAccess: null,
       effectivePermissions: null,
+      isPlatformAdmin: false,
     };
   }
 
@@ -500,6 +503,7 @@ export const getCurrentAppSession = async (): Promise<ClientAppSession> => {
     supabaseUser: SupabaseAuthUserSummary | null;
     tenantAccess: TenantAccessState | null;
     effectivePermissions: User['permissions'] | null;
+    isPlatformAdmin: boolean;
   }>('/api/auth/session')
     .then((payload) => {
       currentAppSessionCache = payload;
@@ -516,6 +520,7 @@ export const getCurrentAppSession = async (): Promise<ClientAppSession> => {
         supabaseUser: null,
         tenantAccess: null,
         effectivePermissions: null,
+        isPlatformAdmin: false,
       };
       currentAppSessionCacheExpiresAt = 0;
       clearCurrentUserCache();

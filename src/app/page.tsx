@@ -23,6 +23,7 @@ import {
   registerUser,
   signInWithLoginAndPassword,
   signInWithSupabaseEmailAndPassword,
+  signOut,
 } from '@/lib/storage';
 
 export default function LoginPage() {
@@ -48,6 +49,11 @@ export default function LoginPage() {
         setStartupError(null);
         setStartupNotice(null);
 
+        if (session.isPlatformAdmin) {
+          router.replace('/admin');
+          return;
+        }
+
         if (session.user) {
           router.replace('/dashboard');
           return;
@@ -60,7 +66,7 @@ export default function LoginPage() {
 
         if (session.authSource === 'supabase-only') {
           setStartupNotice(
-            'Sessao Supabase detectada, mas o shell legado continua bloqueado ate concluirmos a integracao SaaS no runtime.'
+            'Esta conta esta autenticada, mas nao possui acesso a nenhuma empresa. Encerre a sessao abaixo para entrar com outra conta.'
           );
         }
       } catch (error: any) {
@@ -87,12 +93,23 @@ export default function LoginPage() {
           description: `Bem-vindo, ${session.supabaseUser?.email || normalizedIdentifier}! Redirecionando...`,
         });
 
+        if (session.isPlatformAdmin) {
+          router.push('/admin');
+          return;
+        }
+
         if (session.tenantAccess?.canAccessTenant) {
           router.push('/clientes');
           return;
         }
 
-        router.push('/admin');
+        setStartupNotice('Login realizado, mas esta conta nao possui acesso a nenhuma empresa. Voce pode entrar com outra conta abaixo.');
+        toast({
+          variant: 'destructive',
+          title: 'Sem acesso a empresa',
+          description: 'Esta conta nao possui uma membership ativa em nenhuma empresa.',
+        });
+        setIsLoading(false);
         return;
       }
 
@@ -109,6 +126,22 @@ export default function LoginPage() {
         description: error?.message || 'Nao foi possivel realizar o login.',
       });
       setIsLoading(false);
+    }
+  };
+
+  const handleSwitchUser = async () => {
+    try {
+      await signOut();
+      setLogin('');
+      setPassword('');
+      setStartupNotice(null);
+      toast({ title: 'Sessao encerrada', description: 'Agora voce pode entrar com outra conta.' });
+    } catch (error: any) {
+      toast({
+        variant: 'destructive',
+        title: 'Falha ao encerrar sessao',
+        description: error?.message || 'Nao foi possivel encerrar a sessao atual.',
+      });
     }
   };
 
@@ -158,9 +191,12 @@ export default function LoginPage() {
               {startupError}
             </CardDescription>
           ) : startupNotice ? (
-            <CardDescription className="text-sm text-amber-600">
-              {startupNotice}
-            </CardDescription>
+            <div className="space-y-2">
+              <CardDescription className="text-sm text-amber-600">{startupNotice}</CardDescription>
+              <Button type="button" variant="outline" size="sm" onClick={() => void handleSwitchUser()}>
+                Encerrar sessao e trocar usuario
+              </Button>
+            </div>
           ) : null}
         </CardHeader>
         <CardContent>
