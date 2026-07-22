@@ -267,7 +267,12 @@ const parseJsonResponse = async <T>(response: Response): Promise<T> => {
     return undefined as T;
   }
 
-  return (await response.json()) as T;
+  const body = await response.text();
+  if (!body.trim()) {
+    return undefined as T;
+  }
+
+  return JSON.parse(body) as T;
 };
 
 const listRows = async <T>(table: string, params: Record<string, string>) => {
