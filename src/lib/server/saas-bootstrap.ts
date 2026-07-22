@@ -6,12 +6,14 @@ import { assertServiceRoleUsageAllowed, getSupabaseAdminConfig } from './supabas
 import { getSingleton } from './postgres';
 import { slugify } from '@/lib/text';
 
-type BootstrapAuthUserResponse = {
-  user?: {
-    id: string;
-    email?: string | null;
-    app_metadata?: Record<string, unknown> | null;
-  } | null;
+type SupabaseAuthUser = {
+  id: string;
+  email?: string | null;
+  app_metadata?: Record<string, unknown> | null;
+};
+
+type BootstrapAuthUserResponse = SupabaseAuthUser & {
+  user?: SupabaseAuthUser | null;
 };
 
 type CompanyRow = {
@@ -192,10 +194,34 @@ const buildRestUrl = (path: string, params?: Record<string, string>) => {
   return `${url}/rest/v1/${path}${suffix}`;
 };
 
+const getSupabaseErrorMessage = async (response: Response) => {
+  const body = await response.text();
+  if (!body) {
+    return `Falha HTTP ${response.status}.`;
+  }
+
+  try {
+    const payload = JSON.parse(body) as Record<string, unknown>;
+    const message = [payload.message, payload.msg, payload.error_description, payload.error].find(
+      (value): value is string => typeof value === 'string' && value.trim().length > 0
+    );
+    return message || body;
+  } catch {
+    return body;
+  }
+};
+
+const getAuthUserFromResponse = (payload: BootstrapAuthUserResponse): SupabaseAuthUser | null => {
+  if (payload.user?.id) {
+    return payload.user;
+  }
+
+  return payload.id ? payload : null;
+};
+
 const parseJsonResponse = async <T>(response: Response): Promise<T> => {
   if (!response.ok) {
-    const message = await response.text();
-    throw new Error(message || `Falha HTTP ${response.status}.`);
+    throw new Error(await getSupabaseErrorMessage(response));
   }
 
   if (response.status === 204) {
@@ -304,11 +330,12 @@ const fetchSupabaseAuthUser = async (userId: string) => {
   });
 
   const payload = await parseJsonResponse<BootstrapAuthUserResponse>(response);
-  if (!payload.user?.id) {
+  const user = getAuthUserFromResponse(payload);
+  if (!user) {
     throw new SaasBootstrapError('Usuario do Supabase nao encontrado.', 404);
   }
 
-  return payload.user;
+  return user;
 };
 
 export const createSupabaseAuthUser = async (
@@ -354,7 +381,7 @@ export const createSupabaseAuthUser = async (
   });
 
   if (!response.ok) {
-    const message = await response.text();
+    const message = await getSupabaseErrorMessage(response);
     if (response.status === 422 || response.status === 409) {
       throw new SaasBootstrapError(
         'Ja existe um usuario no Supabase com este email. Use outro email para o administrador inicial.',
@@ -362,18 +389,19 @@ export const createSupabaseAuthUser = async (
       );
     }
 
-    throw new SaasBootstrapError(message || 'Nao foi possivel criar o usuario no Supabase Auth.', 500);
+    throw new SaasBootstrapError(message || 'Nao foi possivel criar o usuario no Supabase Auth.', response.status);
   }
 
   const payload = (await response.json()) as BootstrapAuthUserResponse;
-  if (!payload.user?.id) {
+  const user = getAuthUserFromResponse(payload);
+  if (!user) {
     throw new SaasBootstrapError('Supabase Auth nao retornou o usuario criado.', 500);
   }
 
   return {
-    id: payload.user.id,
-    email: payload.user.email?.trim() || null,
-    app_metadata: payload.user.app_metadata ?? null,
+    id: user.id,
+    email: user.email?.trim() || null,
+    app_metadata: user.app_metadata ?? null,
   };
 };
 

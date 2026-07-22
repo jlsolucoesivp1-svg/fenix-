@@ -697,19 +697,20 @@ export const createCompanyFromPanel = async (
     );
   }
 
-  const authUser = await createSupabaseAuthUser({
-    email: adminEmail,
-    password: adminPassword,
-    fullName: adminFullName,
-    loginName: adminLoginName,
-    userMetadata: {
-      require_password_change: normalized.requirePasswordChange,
-    },
-  });
-
+  let authUser: Awaited<ReturnType<typeof createSupabaseAuthUser>> | null = null;
   let bootstrapResult: Awaited<ReturnType<typeof bootstrapFirstCompanyForSupabaseUser>> | null = null;
 
   try {
+    authUser = await createSupabaseAuthUser({
+      email: adminEmail,
+      password: adminPassword,
+      fullName: adminFullName,
+      loginName: adminLoginName,
+      userMetadata: {
+        require_password_change: normalized.requirePasswordChange,
+      },
+    });
+
     bootstrapResult = await bootstrapFirstCompanyForSupabaseUser({
       actor: input.actor,
       supabaseUserId: authUser.id,
@@ -766,12 +767,12 @@ export const createCompanyFromPanel = async (
       },
     ]);
   } catch (error) {
-    if (bootstrapResult?.companyId) {
+    if (bootstrapResult?.companyId && authUser) {
       await deleteCompanyDeep({
         companyId: bootstrapResult.companyId,
         authUserId: authUser.id,
       });
-    } else {
+    } else if (authUser) {
       try {
         await deleteSupabaseAuthUser(authUser.id);
       } catch (cleanupError) {
@@ -782,7 +783,7 @@ export const createCompanyFromPanel = async (
     throw error;
   }
 
-  if (!bootstrapResult) {
+  if (!bootstrapResult || !authUser) {
     throw new SaasBootstrapError('Bootstrap administrativo nao retornou resultado.', 500);
   }
 
