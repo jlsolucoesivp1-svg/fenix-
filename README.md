@@ -1,35 +1,45 @@
-# Assistec Now - Sistema de Gestão
+# Fenix SaaS
 
-Este é um sistema de gestão para assistências técnicas, construído com Next.js e hospedado no Firebase Studio.
+Sistema de gestao com runtime legado em Postgres e migracao SaaS em andamento com Supabase e painel administrativo da JL Informatica.
 
-## Como Rodar o Projeto Localmente
+## Requisitos
 
-Se você fez o download do código-fonte, siga estes passos para executar o aplicativo no seu computador.
+- Node.js 24.x
+- npm
+- PostgreSQL acessivel por `DATABASE_URL`
+- credenciais do Supabase para os fluxos SaaS
 
-### Pré-requisitos
+## Ambiente local
 
-- **Node.js**: Você precisa ter o Node.js (versão 20 ou superior) instalado em seu computador. Você pode baixá-lo em [nodejs.org](https://nodejs.org/).
+1. Instale as dependencias:
 
-### Passo 1: Instale as Dependências
+```bash
+npm install
+```
 
-1.  Abra um terminal ou prompt de comando.
-2.  Navegue até a pasta onde você descompactou os arquivos do sistema.
-3.  Execute o seguinte comando para instalar todas as bibliotecas necessárias:
+2. Crie o arquivo `.env.local` a partir de `.env.example`.
 
-    ```bash
-    npm install
-    ```
+3. Rode o sistema:
 
-### Passo 2: Inicie o Servidor de Desenvolvimento
+```bash
+npm run dev
+```
 
-1.  Após a conclusão da instalação, na mesma pasta, execute o comando:
+4. Abra `http://localhost:3000`.
 
-    ```bash
-    npm run dev
-    ```
+## Validacao antes de publicar
 
-2.  O terminal mostrará uma mensagem indicando que o servidor foi iniciado, geralmente em `http://localhost:3000`.
+Execute:
 
-3.  Abra seu navegador de internet e acesse [http://localhost:3000](http://localhost:3000) para ver o sistema funcionando.
+```bash
+npm run deploy:check
+```
 
-Qualquer alteração que você fizer nos arquivos do código será refletida automaticamente no navegador.
+Esse comando roda:
+- `typecheck`
+- `test`
+- `build`
+
+## Deploy na Vercel
+
+O passo a passo completo esta em [docs/vercel-deploy.md](/C:/Users/Servidor/Desktop/Sitema%20Fenix%20vercel%2013-07-2026/bkp%20sistema%2007052026/Fenix%20Saas/docs/vercel-deploy.md).

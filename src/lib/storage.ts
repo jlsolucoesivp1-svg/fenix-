@@ -160,6 +160,34 @@ export type SuperAdminCompanySummary = {
   lastActivityAt: string | null;
 };
 
+export type SuperAdminCompanyRole = {
+  id: string;
+  name: string;
+  isCompanyAdmin: boolean;
+};
+
+export type SuperAdminCompanyUser = {
+  id: string;
+  name: string;
+  email: string | null;
+  loginName: string | null;
+  status: 'active' | 'inactive' | 'invited' | 'revoked';
+  isOwner: boolean;
+  roleId: string | null;
+  roleName: string | null;
+  roleIsCompanyAdmin: boolean;
+};
+
+export type UpdateSuperAdminCompanyUserInput = {
+  companyId: string;
+  userId: string;
+  name: string;
+  email: string;
+  loginName?: string | null;
+  roleId: string;
+  status: 'active' | 'inactive';
+};
+
 export type CreateSuperAdminCompanyInput = {
   companyTradeName: string;
   companyLegalName?: string;
@@ -646,10 +674,28 @@ export const listSuperAdminAuditLogs = async (params?: { companyId?: string; lim
 };
 
 export const listSuperAdminCompanyUsers = async (companyId: string) => {
-  const payload = await apiFetch<{ users: User[] }>(
+  return apiFetch<{ users: SuperAdminCompanyUser[]; roles: SuperAdminCompanyRole[] }>(
     `/api/internal/superadmin/users?companyId=${encodeURIComponent(companyId)}`
   );
-  return payload.users;
+};
+
+export const updateSuperAdminCompanyUser = async (payload: UpdateSuperAdminCompanyUserInput) => {
+  const response = await apiFetch<{ result: SuperAdminCompanyUser }>('/api/internal/superadmin/users', {
+    method: 'PATCH',
+    body: JSON.stringify(payload),
+  });
+  return response.result;
+};
+
+export const resetSuperAdminCompanyUserPassword = async (payload: {
+  companyId: string;
+  userId: string;
+  password: string;
+}) => {
+  await apiFetch<{ result: { userId: string } }>('/api/internal/superadmin/users', {
+    method: 'POST',
+    body: JSON.stringify({ ...payload, operation: 'reset-password' }),
+  });
 };
 
 export const listSuperAdminMemberships = async (companyId?: string) => {

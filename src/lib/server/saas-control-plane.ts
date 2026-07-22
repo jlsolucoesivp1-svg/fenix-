@@ -9,7 +9,6 @@ import {
   deleteSupabaseAuthUser,
 } from './saas-bootstrap';
 import { assertServiceRoleUsageAllowed, getSupabaseAdminConfig } from './supabase-admin';
-import { listSaasUsers } from './saas-users';
 
 type CompanyRow = {
   id: string;
@@ -62,6 +61,21 @@ type ProfileRow = {
   full_name: string | null;
   email: string | null;
   login_name: string | null;
+};
+
+type RoleRow = {
+  id: string;
+  company_id: string | null;
+  name: string;
+  is_company_admin: boolean;
+  is_system: boolean;
+};
+
+type SupabaseAuthUser = {
+  id: string;
+  email?: string | null;
+  app_metadata?: Record<string, unknown> | null;
+  user_metadata?: Record<string, unknown> | null;
 };
 
 type AuditLogRow = {
@@ -146,6 +160,36 @@ export interface UpdateSuperAdminCompanyInput {
   trialEndsAt?: string | null;
   internalNotes?: string | null;
   requirePasswordChange?: boolean;
+}
+
+export interface SuperAdminCompanyRole {
+  id: string;
+  name: string;
+  isCompanyAdmin: boolean;
+}
+
+export interface SuperAdminCompanyUser {
+  id: string;
+  name: string;
+  email: string | null;
+  loginName: string | null;
+  status: MembershipStatus;
+  isOwner: boolean;
+  roleId: string | null;
+  roleName: string | null;
+  roleIsCompanyAdmin: boolean;
+}
+
+export interface UpdateSuperAdminCompanyUserInput {
+  companyId: string;
+  userId: string;
+  name: string;
+  email: string;
+  loginName?: string | null;
+  roleId: string;
+  status: 'active' | 'inactive';
+  actorSupabaseUserId: string | null;
+  requestMetadata?: CreateCompanyFromPanelInput['requestMetadata'];
 }
 
 export interface CreateCompanyFromPanelInput extends SuperAdminCompanyFormInput {
@@ -437,6 +481,63 @@ const fetchProfiles = async (userIds: string[]) => {
   });
 };
 
+const fetchCompanyRoles = async (companyId: string) =>
+  listRows<RoleRow>('roles', {
+    select: 'id,company_id,name,is_company_admin,is_system',
+    company_id: `eq.${companyId}`,
+    order: 'name.asc',
+  });
+
+const fetchSupabaseAuthUser = async (userId: string): Promise<SupabaseAuthUser> => {
+  assertServiceRoleUsageAllowed('read_company_user_auth_for_superadmin');
+  const { url } = getSupabaseAdminConfig();
+  const response = await fetch(`${url}/auth/v1/admin/users/${userId}`, {
+    method: 'GET',
+    headers: buildAdminHeaders(),
+    cache: 'no-store',
+  });
+
+  const payload = await parseJsonResponse<SupabaseAuthUser | { user?: SupabaseAuthUser }>(response);
+  const user = (payload as { user?: SupabaseAuthUser }).user ?? (payload as SupabaseAuthUser);
+  if (!user?.id) {
+    throw new SaasBootstrapError('Usuario nao encontrado no Supabase Auth.', 404);
+  }
+  return user;
+};
+
+const updateSupabaseAuthUserForSuperAdmin = async (params: {
+  user: SupabaseAuthUser;
+  email?: string;
+  name?: string;
+  loginName?: string | null;
+  password?: string;
+  activeCompanyId?: string | null;
+}) => {
+  assertServiceRoleUsageAllowed('update_company_user_auth_for_superadmin');
+  const { url } = getSupabaseAdminConfig();
+  const response = await fetch(`${url}/auth/v1/admin/users/${params.user.id}`, {
+    method: 'PUT',
+    headers: buildAdminHeaders(),
+    body: JSON.stringify({
+      ...(params.email ? { email: params.email } : {}),
+      ...(params.name ? { user_metadata: { ...(params.user.user_metadata ?? {}), full_name: params.name } } : {}),
+      ...(params.password ? { password: params.password } : {}),
+      ...(params.loginName !== undefined || params.activeCompanyId !== undefined
+        ? {
+            app_metadata: {
+              ...(params.user.app_metadata ?? {}),
+              ...(params.loginName !== undefined ? { login_name: params.loginName } : {}),
+              ...(params.activeCompanyId !== undefined ? { active_company_id: params.activeCompanyId } : {}),
+            },
+          }
+        : {}),
+    }),
+    cache: 'no-store',
+  });
+
+  await parseJsonResponse(response);
+};
+
 const fetchAuditLogs = async (params?: { companyId?: string; limit?: number }) =>
   listRows<AuditLogRow>('audit_logs', {
     select: 'id,company_id,actor_user_id,action,entity,entity_id,request_id,success,severity,metadata,created_at',
@@ -644,7 +745,203 @@ export const listSuperAdminAuditLogs = async (params?: {
   }));
 };
 
-export const getSuperAdminCompanyUsers = async (companyId: string) => listSaasUsers(companyId);
+export const getSuperAdminCompanyUsers = async (companyId: string): Promise<{
+  users: SuperAdminCompanyUser[];
+  roles: SuperAdminCompanyRole[];
+}> => {
+  const [company, memberships, roles] = await Promise.all([
+    selectSingle<CompanyRow>('companies', {
+      select: 'id,slug,trade_name,legal_name,document_number,phone,email,address_line,city,state_code,zip_code,status,created_at',
+      id: `eq.${companyId}`,
+    }),
+    listRows<MembershipRow>('company_memberships', {
+      select: 'id,company_id,user_id,role_id,is_owner,status,is_default,created_at',
+      company_id: `eq.${companyId}`,
+      order: 'created_at.asc',
+    }),
+    fetchCompanyRoles(companyId),
+  ]);
+
+  if (!company) {
+    throw new SaasBootstrapError('Empresa nao encontrada.', 404);
+  }
+
+  const profiles = await fetchProfiles(memberships.map((membership) => membership.user_id));
+  const profileById = new Map(profiles.map((profile) => [profile.id, profile]));
+  const roleById = new Map(roles.map((role) => [role.id, role]));
+
+  return {
+    users: memberships
+      .filter((membership) => membership.status !== 'revoked')
+      .map((membership) => {
+        const profile = profileById.get(membership.user_id);
+        const role = membership.role_id ? roleById.get(membership.role_id) : null;
+        return {
+          id: membership.user_id,
+          name: profile?.full_name || profile?.email || membership.user_id,
+          email: profile?.email || null,
+          loginName: profile?.login_name || null,
+          status: membership.status,
+          isOwner: membership.is_owner,
+          roleId: membership.role_id,
+          roleName: role?.name || null,
+          roleIsCompanyAdmin: Boolean(role?.is_company_admin),
+        };
+      }),
+    roles: roles.map((role) => ({
+      id: role.id,
+      name: role.name,
+      isCompanyAdmin: role.is_company_admin,
+    })),
+  };
+};
+
+const loadSuperAdminCompanyUser = async (companyId: string, userId: string) => {
+  const [company, membership, authUser] = await Promise.all([
+    selectSingle<CompanyRow>('companies', {
+      select: 'id,slug,trade_name,legal_name,document_number,phone,email,address_line,city,state_code,zip_code,status,created_at',
+      id: `eq.${companyId}`,
+    }),
+    selectSingle<MembershipRow>('company_memberships', {
+      select: 'id,company_id,user_id,role_id,is_owner,status,is_default,created_at',
+      company_id: `eq.${companyId}`,
+      user_id: `eq.${userId}`,
+    }),
+    fetchSupabaseAuthUser(userId),
+  ]);
+
+  if (!company) throw new SaasBootstrapError('Empresa nao encontrada.', 404);
+  if (!membership) throw new SaasBootstrapError('Usuario nao possui membership nesta empresa.', 404);
+
+  const [profiles, roles] = await Promise.all([
+    fetchProfiles([userId]),
+    fetchCompanyRoles(companyId),
+  ]);
+  const profile = profiles[0] ?? null;
+  const role = membership.role_id ? roles.find((item) => item.id === membership.role_id) ?? null : null;
+  return { company, membership, authUser, profile, roles, role };
+};
+
+const auditSuperAdminUserChanges = async (params: {
+  companyId: string;
+  userId: string;
+  actorSupabaseUserId: string | null;
+  requestMetadata?: CreateCompanyFromPanelInput['requestMetadata'];
+  actions: Array<{ action: string; metadata?: Record<string, unknown>; severity?: AuditSeverity }>;
+}) => {
+  await insertAuditLogs(
+    params.actions.map((item) => ({
+      companyId: params.companyId,
+      actorUserId: params.actorSupabaseUserId,
+      action: item.action,
+      entity: 'company_user',
+      entityId: params.userId,
+      severity: item.severity ?? 'info',
+      requestId: params.requestMetadata?.requestId || null,
+      ipAddress: params.requestMetadata?.ipAddress || null,
+      userAgent: params.requestMetadata?.userAgent || null,
+      metadata: {
+        platform_admin_id: params.requestMetadata?.platformAdminId || null,
+        ...(item.metadata ?? {}),
+      },
+    }))
+  );
+};
+
+export const updateSuperAdminCompanyUser = async (input: UpdateSuperAdminCompanyUserInput) => {
+  const name = input.name.trim();
+  const email = input.email.trim().toLowerCase();
+  const loginName = normalizeText(input.loginName);
+  if (!name) throw new SaasBootstrapError('Nome do usuario obrigatorio.', 400);
+  if (!email || !email.includes('@')) throw new SaasBootstrapError('E-mail do usuario invalido.', 400);
+  if (input.status !== 'active' && input.status !== 'inactive') {
+    throw new SaasBootstrapError('Status do usuario invalido.', 400);
+  }
+
+  const current = await loadSuperAdminCompanyUser(input.companyId, input.userId);
+  if (!current.profile) {
+    throw new SaasBootstrapError('Profile do usuario nao encontrado.', 409);
+  }
+  const nextRole = current.roles.find((role) => role.id === input.roleId);
+  if (!nextRole) throw new SaasBootstrapError('Role invalida para esta empresa.', 400);
+
+  const activeCompanyId =
+    typeof current.authUser.app_metadata?.active_company_id === 'string' && current.authUser.app_metadata.active_company_id.trim()
+      ? current.authUser.app_metadata.active_company_id
+      : current.company.id;
+
+  await updateSupabaseAuthUserForSuperAdmin({
+    user: current.authUser,
+    email,
+    name,
+    loginName,
+    activeCompanyId,
+  });
+  await Promise.all([
+    patchRows<ProfileRow>(
+      'profiles',
+      { full_name: name, email, login_name: loginName },
+      { id: `eq.${input.userId}` }
+    ),
+    patchRows<MembershipRow>(
+      'company_memberships',
+      { role_id: nextRole.id, status: input.status },
+      { company_id: `eq.${input.companyId}`, user_id: `eq.${input.userId}` }
+    ),
+  ]);
+
+  const actions: Array<{ action: string; metadata?: Record<string, unknown>; severity?: AuditSeverity }> = [];
+  if (current.profile?.full_name !== name) actions.push({ action: 'superadmin_user_name_updated' });
+  if ((current.authUser.email || '').toLowerCase() !== email) actions.push({ action: 'superadmin_user_email_updated' });
+  if ((current.profile?.login_name || null) !== loginName) actions.push({ action: 'superadmin_user_login_updated' });
+  if (current.membership.role_id !== nextRole.id) {
+    actions.push({ action: 'superadmin_user_role_updated', metadata: { previous_role_id: current.membership.role_id, next_role_id: nextRole.id } });
+  }
+  if (current.membership.status !== input.status) {
+    actions.push({
+      action: input.status === 'inactive' ? 'superadmin_user_suspended' : 'superadmin_user_reactivated',
+      severity: input.status === 'inactive' ? 'warn' : 'info',
+    });
+  }
+  if (actions.length > 0) {
+    await auditSuperAdminUserChanges({
+      companyId: input.companyId,
+      userId: input.userId,
+      actorSupabaseUserId: input.actorSupabaseUserId,
+      requestMetadata: input.requestMetadata,
+      actions,
+    });
+  }
+
+  const result = await getSuperAdminCompanyUsers(input.companyId);
+  const user = result.users.find((item) => item.id === input.userId);
+  if (!user) throw new SaasBootstrapError('Usuario atualizado, mas nao retornado pela listagem.', 500);
+  return user;
+};
+
+export const resetSuperAdminCompanyUserPassword = async (params: {
+  companyId: string;
+  userId: string;
+  password: string;
+  actorSupabaseUserId: string | null;
+  requestMetadata?: CreateCompanyFromPanelInput['requestMetadata'];
+}) => {
+  const password = params.password.trim();
+  if (password.length < 8) {
+    throw new SaasBootstrapError('A nova senha temporaria precisa ter pelo menos 8 caracteres.', 400);
+  }
+
+  const current = await loadSuperAdminCompanyUser(params.companyId, params.userId);
+  await updateSupabaseAuthUserForSuperAdmin({ user: current.authUser, password });
+  await auditSuperAdminUserChanges({
+    companyId: params.companyId,
+    userId: params.userId,
+    actorSupabaseUserId: params.actorSupabaseUserId,
+    requestMetadata: params.requestMetadata,
+    actions: [{ action: 'superadmin_user_password_reset', severity: 'warn' }],
+  });
+  return { userId: params.userId };
+};
 
 export const listSuperAdminMemberships = async (companyId?: string): Promise<SuperAdminMembershipSummary[]> => {
   const memberships = await listRows<MembershipRow>('company_memberships', {
