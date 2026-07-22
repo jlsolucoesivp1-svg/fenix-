@@ -1,4 +1,3 @@
-
 'use client';
 
 import * as React from 'react';
@@ -25,7 +24,6 @@ import {
   AlertDialogTitle,
 } from '@/components/ui/alert-dialog';
 import { Popover, PopoverContent, PopoverTrigger } from '@/components/ui/popover';
-import { Command, CommandEmpty, CommandGroup, CommandInput, CommandItem, CommandList } from '@/components/ui/command';
 import { Input, CurrencyInput } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
 import { Textarea } from '@/components/ui/textarea';
@@ -37,7 +35,19 @@ import {
   SelectValue,
 } from '@/components/ui/select';
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs';
-import { getCustomers, getStock, getCompanyInfo, getSettings, saveFinancialTransactions, getFinancialTransactions } from '@/lib/storage';
+import {
+  getCustomers,
+  getFinancialTransactions,
+  getServiceOrders,
+  getSettings,
+  getStock,
+  getTenantSettings,
+  listTenantCustomers,
+  listTenantProducts,
+  listTenantServiceOrders,
+  saveFinancialTransactions,
+  searchTenantCustomers,
+} from '@/lib/storage';
 import { useCurrentUser } from '@/hooks/use-current-user';
 import type { Customer, ServiceOrder, StockItem, CompanyInfo, User, InternalNote, FinancialTransaction, OSPayment, ServiceOrderItem } from '@/types';
 import { useToast } from '@/hooks/use-toast';
@@ -45,6 +55,14 @@ import { ScrollArea } from '@/components/ui/scroll-area';
 import { cn } from '@/lib/utils';
 import { add } from 'date-fns';
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '../ui/table';
+import { findStockItemForServiceOrderItem, getAvailableStockForDraftItem } from '@/lib/service-order-stock';
+import { resolveServiceOrderStatusFromBalance } from '@/lib/service-order-financial';
+import { formatServiceOrderNumber, getNextSequentialServiceOrderId } from '@/lib/service-order-id';
+import { SERVICE_ORDER_PAYMENT_METHODS } from '@/lib/payment-methods';
+import { CustomerAutocomplete } from '@/components/customers/customer-autocomplete';
+import { LocalAutocomplete, highlightMatch } from '@/components/ui/local-autocomplete';
+import { useCurrentAppSession } from '@/hooks/use-current-app-session';
+import { ServiceOrderFilesPanel } from '@/components/service-orders/service-order-files-panel';
 
 interface NewOrderSheetProps {
   onNewOrderClick: (customer?: Customer | null) => void;
@@ -52,14 +70,16 @@ interface NewOrderSheetProps {
   serviceOrder?: ServiceOrder | null;
   isOpen?: boolean;
   onOpenChange?: (isOpen: boolean) => void;
-  onSave?: (serviceOrder: ServiceOrder) => void;
+  onSave?: (serviceOrder: ServiceOrder) => void | Promise<void>;
+  onFinalizeRequest?: (serviceOrder: ServiceOrder) => void | Promise<void>;
 }
-
-export function NewOrderSheet({ onNewOrderClick, customer, serviceOrder, isOpen, onOpenChange, onSave }: NewOrderSheetProps) {
+export function NewOrderSheet({ onNewOrderClick, customer, serviceOrder, isOpen, onOpenChange, onSave, onFinalizeRequest }: NewOrderSheetProps) {
   const { toast } = useToast();
   const { user: currentUser } = useCurrentUser();
+  const session = useCurrentAppSession();
   
   const [customers, setCustomers] = React.useState<Customer[]>([]);
+  const [existingOrders, setExistingOrders] = React.useState<ServiceOrder[]>([]);
   const [stock, setStock] = React.useState<StockItem[]>([]);
   const [selectedCustomerId, setSelectedCustomerId] = React.useState<string>('');
   const [reportedProblem, setReportedProblem] = React.useState('');
@@ -78,26 +98,34 @@ export function NewOrderSheet({ onNewOrderClick, customer, serviceOrder, isOpen,
   const [isManualAddDialogOpen, setIsManualAddDialogOpen] = React.useState(false);
   const [manualAddItem, setManualAddItem] = React.useState<ServiceOrderItem | null>(null);
   
-  const [newItem, setNewItem] = React.useState({ description: '', quantity: 1, unitPrice: 0, type: 'service' as 'service' | 'part' });
+  const [newItem, setNewItem] = React.useState({ description: '', quantity: 1, unitPrice: 0, type: 'service' as 'service' | 'part', stockItemId: undefined as string | undefined });
   const [openCombobox, setOpenCombobox] = React.useState(false);
+  const useSaasServiceOrders =
+    session.authSource === 'supabase-only' && session.tenantAccess?.canAccessTenant === true;
 
   const isEditing = !!serviceOrder;
   
   React.useEffect(() => {
     const loadData = async () => {
-      const [customersData, stockData] = await Promise.all([
-        getCustomers(),
-        getStock(),
-      ]);
+      if (!isOpen) {
+        return;
+      }
+
+      const [customersData, stockData, serviceOrdersData] = await Promise.all(
+        useSaasServiceOrders
+          ? [listTenantCustomers(), listTenantProducts(), listTenantServiceOrders()]
+          : [getCustomers(), getStock(), getServiceOrders()]
+      );
       setCustomers(customersData);
       setStock(stockData);
+      setExistingOrders(serviceOrdersData);
     };
     loadData();
-  }, []);
+  }, [isOpen, useSaasServiceOrders]);
 
   React.useEffect(() => {
     const loadWarranty = async () => {
-      const settings = await getSettings();
+      const settings = useSaasServiceOrders ? await getTenantSettings() : await getSettings();
       let defaultWarrantyDays = settings.defaultWarrantyDays || 90;
       const defaultWarranty = `${defaultWarrantyDays} dias`;
 
@@ -148,7 +176,7 @@ export function NewOrderSheet({ onNewOrderClick, customer, serviceOrder, isOpen,
       }
     };
     loadWarranty();
-  }, [serviceOrder, customer, isEditing, isOpen, customers]);
+  }, [serviceOrder, customer, isEditing, isOpen, customers, useSaasServiceOrders]);
 
   const handleEquipmentChange = (e: React.ChangeEvent<HTMLInputElement>) => {
     const { id, value } = e.target;
@@ -166,23 +194,41 @@ export function NewOrderSheet({ onNewOrderClick, customer, serviceOrder, isOpen,
     }
 
     if (newItem.type === 'part') {
-      const stockItem = stock.find(item => item.name.toLowerCase() === newItem.description.toLowerCase());
+      const stockItem = findStockItemForServiceOrderItem(stock, newItem);
       if (!stockItem) {
         setManualAddItem({ ...newItem, id: Date.now() });
         setIsManualAddDialogOpen(true);
         return;
       }
+
+      const availableQuantity = getAvailableStockForDraftItem(stock, serviceOrder?.items || [], items, {
+        stockItemId: stockItem.id,
+        description: stockItem.name,
+      });
+
+      if ((availableQuantity ?? 0) < newItem.quantity) {
+        toast({
+          variant: 'destructive',
+          title: 'Estoque insuficiente',
+          description: `A peça "${stockItem.name}" possui ${Math.max(availableQuantity ?? 0, 0)} unidade(s) disponível(is) para esta OS.`,
+        });
+        return;
+      }
+
+      setItems([...items, { ...newItem, id: Date.now(), stockItemId: stockItem.id, description: stockItem.name, unitPrice: stockItem.price }]);
+      setNewItem({ description: '', quantity: 1, unitPrice: 0, type: 'service', stockItemId: undefined });
+      return;
     }
 
     setItems([...items, { ...newItem, id: Date.now() }]);
-    setNewItem({ description: '', quantity: 1, unitPrice: 0, type: 'service' });
+    setNewItem({ description: '', quantity: 1, unitPrice: 0, type: 'service', stockItemId: undefined });
   };
 
   const confirmManualAdd = () => {
     if (manualAddItem) {
       setItems([...items, manualAddItem]);
     }
-    setNewItem({ description: '', quantity: 1, unitPrice: 0, type: 'service' });
+    setNewItem({ description: '', quantity: 1, unitPrice: 0, type: 'service', stockItemId: undefined });
     setIsManualAddDialogOpen(false);
     setManualAddItem(null);
   };
@@ -215,25 +261,24 @@ export function NewOrderSheet({ onNewOrderClick, customer, serviceOrder, isOpen,
       setPayments(prev => [...prev, paymentToAdd]);
       
       const newBalance = balanceDue - newPayment.amount;
-      if (newBalance <= 0) {
-          setStatus("Finalizado");
-      } else {
-          setStatus("Aguardando Pagamento");
-      }
+      setStatus(resolveServiceOrderStatusFromBalance(newBalance));
       
       const transaction: Omit<FinancialTransaction, 'id'> = {
         type: 'receita',
-        description: `Pagamento da OS #${serviceOrder?.id.slice(-4) || 'NOVA'}`,
+        description: `Pagamento da OS #${formatServiceOrderNumber(serviceOrder?.id) || 'NOVA'}`,
         amount: newPayment.amount,
         date: new Date().toISOString().split('T')[0],
-        category: 'Venda de Serviço',
+        category: 'Venda de Servi\u00e7o',
         paymentMethod: newPayment.method,
         relatedServiceOrderId: serviceOrder?.id,
         status: 'pago',
+        origin: 'service-order-payment',
       };
       
-      const existingTransactions = await getFinancialTransactions();
-      await saveFinancialTransactions([{ ...transaction, id: `FIN-${Date.now()}` }, ...existingTransactions]);
+      if (!useSaasServiceOrders) {
+        const existingTransactions = await getFinancialTransactions();
+        await saveFinancialTransactions([{ ...transaction, id: `FIN-${Date.now()}` }, ...existingTransactions]);
+      }
 
       toast({ title: "Pagamento adicionado!", description: `R$ ${newPayment.amount.toFixed(2)} recebido.`});
       setNewPayment({ amount: 0, method: 'Dinheiro' });
@@ -269,7 +314,7 @@ export function NewOrderSheet({ onNewOrderClick, customer, serviceOrder, isOpen,
     }
 
     const finalOrder: ServiceOrder = {
-        id: serviceOrder?.id || `OS-${Date.now()}`,
+        id: serviceOrder?.id || getNextSequentialServiceOrderId(existingOrders),
         customerName: selectedCustomer.name,
         customerId: selectedCustomerId,
         equipment: fullEquipmentName,
@@ -296,14 +341,31 @@ export function NewOrderSheet({ onNewOrderClick, customer, serviceOrder, isOpen,
     return finalOrder;
   };
   
-  const handleSaveAndClose = () => {
+  const handleSaveAndClose = async () => {
     const finalOrder = getFinalOrderData();
     if (finalOrder && onSave) {
-      onSave(finalOrder);
+      await onSave(finalOrder);
       if (onOpenChange) {
         onOpenChange(false);
       }
     }
+  };
+
+  const handleSaveAndFinalize = async () => {
+    if (!isEditing || !onSave || !onFinalizeRequest) {
+      return;
+    }
+
+    const finalOrder = getFinalOrderData();
+    if (!finalOrder) {
+      return;
+    }
+
+    await onSave(finalOrder);
+    if (onOpenChange) {
+      onOpenChange(false);
+    }
+    await onFinalizeRequest(finalOrder);
   };
 
   return (
@@ -320,9 +382,9 @@ export function NewOrderSheet({ onNewOrderClick, customer, serviceOrder, isOpen,
               </kbd>
           </Button>
         </DialogTrigger>
-        <DialogContent className="sm:max-w-5xl w-full h-[95vh] flex flex-col p-0">
+        <DialogContent className="flex h-[95dvh] w-[calc(100vw-1rem)] flex-col overflow-hidden p-0 sm:max-w-5xl">
           <DialogHeader className="p-4 flex-shrink-0 border-b">
-            <DialogTitle>{isEditing ? `Editar Ordem de Serviço #${serviceOrder?.id.slice(-4)}` : 'Nova Ordem de Serviço'}</DialogTitle>
+            <DialogTitle>{isEditing ? `Editar Ordem de Serviço #${formatServiceOrderNumber(serviceOrder?.id)}` : 'Nova Ordem de Serviço'}</DialogTitle>
             <DialogDescription>
               {isEditing ? `Altere os dados do atendimento, adicione serviços e peças.` : 'Preencha os dados para registrar um novo atendimento.'}
             </DialogDescription>
@@ -331,11 +393,12 @@ export function NewOrderSheet({ onNewOrderClick, customer, serviceOrder, isOpen,
           <div className="flex-grow min-h-0">
               <Tabs defaultValue="general" className="h-full flex flex-col">
                   <div className="px-4 pt-4">
-                    <TabsList className="grid w-full grid-cols-4">
+                    <TabsList className="grid h-auto w-full grid-cols-2 gap-2 sm:grid-cols-5">
                         <TabsTrigger value="general">Dados Gerais</TabsTrigger>
                         <TabsTrigger value="items">Serviços e Peças</TabsTrigger>
                         <TabsTrigger value="financial">Financeiro</TabsTrigger>
                         <TabsTrigger value="notes">Comentários</TabsTrigger>
+                        <TabsTrigger value="files">Arquivos</TabsTrigger>
                     </TabsList>
                   </div>
 
@@ -343,19 +406,17 @@ export function NewOrderSheet({ onNewOrderClick, customer, serviceOrder, isOpen,
                     <ScrollArea className="h-full">
                       <div className="p-4 pt-2 space-y-3">
                         <TabsContent value="general" className="mt-0 space-y-3">
-                            <div className="grid grid-cols-3 gap-3">
-                              <div className="col-span-2">
+                            <div className="grid grid-cols-1 gap-3 md:grid-cols-3">
+                              <div className="md:col-span-2">
                                   <Label htmlFor="customer">Cliente</Label>
-                                  <Select value={selectedCustomerId} onValueChange={setSelectedCustomerId}>
-                                    <SelectTrigger>
-                                      <SelectValue placeholder="Selecione um cliente" />
-                                    </SelectTrigger>
-                                    <SelectContent>
-                                      {customers.map((c) => (
-                                          <SelectItem key={c.id} value={c.id}>{c.name}</SelectItem>
-                                      ))}
-                                    </SelectContent>
-                                  </Select>
+                                  <CustomerAutocomplete
+                                    id="customer"
+                                    selectedCustomer={customers.find((c) => c.id === selectedCustomerId) ?? null}
+                                    onSelect={(customer) => setSelectedCustomerId(customer?.id ?? '')}
+                                    searchFunction={useSaasServiceOrders ? searchTenantCustomers : undefined}
+                                    placeholder="Buscar cliente para a OS..."
+                                    emptyMessage="Nenhum cliente encontrado."
+                                  />
                               </div>
                               <div>
                                 <Label htmlFor="status">Status</Label>
@@ -377,7 +438,7 @@ export function NewOrderSheet({ onNewOrderClick, customer, serviceOrder, isOpen,
                                 </Select>
                               </div>
                             </div>
-                            <div className="grid grid-cols-4 gap-3">
+                            <div className="grid grid-cols-1 gap-3 sm:grid-cols-2 xl:grid-cols-4">
                               <div>
                                 <Label htmlFor="type">Tipo</Label>
                                 <Input id="type" placeholder="Ex: Notebook" value={equipmentType} onChange={(e) => setEquipmentType(e.target.value)} />
@@ -395,7 +456,7 @@ export function NewOrderSheet({ onNewOrderClick, customer, serviceOrder, isOpen,
                                 <Input id="serial" placeholder="Serial" value={equipment.serial} onChange={handleEquipmentChange} />
                               </div>
                             </div>
-                             <div className="grid grid-cols-2 gap-3">
+                             <div className="grid grid-cols-1 gap-3 lg:grid-cols-2">
                                 <div className="space-y-1.5">
                                   <Label htmlFor="reported_problem">Defeito Reclamado</Label>
                                   <Textarea id="reported_problem" placeholder="Descrição do problema relatado pelo cliente." value={reportedProblem} onChange={(e) => setReportedProblem(e.target.value)} rows={3}/>
@@ -409,7 +470,7 @@ export function NewOrderSheet({ onNewOrderClick, customer, serviceOrder, isOpen,
                                 <Label htmlFor="technical_report">Diagnóstico / Laudo Técnico</Label>
                                 <Textarea id="technical_report" placeholder="Descrição técnica detalhada do diagnóstico, serviço a ser executado, peças necessárias, etc." value={technicalReport} onChange={(e) => setTechnicalReport(e.target.value)} rows={4}/>
                               </div>
-                              <div className="grid grid-cols-2 gap-3 items-end">
+                              <div className="grid grid-cols-1 items-end gap-3 sm:grid-cols-2">
                                   <div className="space-y-1.5">
                                       <Label htmlFor="warranty">Garantia Aplicada</Label>
                                       <Input id="warranty" placeholder="Ex: 90 dias" value={warranty} onChange={(e) => setWarranty(e.target.value)}/>
@@ -421,13 +482,13 @@ export function NewOrderSheet({ onNewOrderClick, customer, serviceOrder, isOpen,
                           <div>
                             <div className="space-y-2">
                               {items.map((item) => (
-                                <div key={item.id} className="flex items-center gap-2 p-2 rounded-md border">
-                                  <div className="flex-grow grid grid-cols-12 gap-2 items-center">
-                                      <span className="col-span-5 truncate">{item.description}</span>
+                                <div key={item.id} className="flex items-start gap-2 rounded-md border p-2">
+                                  <div className="grid flex-grow gap-1 sm:grid-cols-12 sm:items-center sm:gap-2">
+                                      <span className="sm:col-span-5 sm:truncate">{item.description}</span>
                                       <span className="col-span-2 text-sm text-muted-foreground">({item.type === 'service' ? 'Serviço' : 'Peça'})</span>
-                                      <span className="col-span-1 text-sm text-muted-foreground">Qtd: {item.quantity}</span>
-                                      <span className="col-span-2 text-sm text-muted-foreground">Unit: R$ {item.unitPrice.toLocaleString('pt-BR', { minimumFractionDigits: 2 })}</span>
-                                      <span className="col-span-2 font-medium text-right">R$ {(item.quantity * item.unitPrice).toLocaleString('pt-BR', { minimumFractionDigits: 2 })}</span>
+                                      <span className="text-sm text-muted-foreground sm:col-span-1">Qtd: {item.quantity}</span>
+                                      <span className="text-sm text-muted-foreground sm:col-span-2">Unit: R$ {item.unitPrice.toLocaleString('pt-BR', { minimumFractionDigits: 2 })}</span>
+                                      <span className="font-medium sm:col-span-2 sm:text-right">R$ {(item.quantity * item.unitPrice).toLocaleString('pt-BR', { minimumFractionDigits: 2 })}</span>
                                   </div>
                                   <Button variant="ghost" size="icon" className="shrink-0" onClick={() => handleRemoveItem(item.id)}>
                                     <Trash2 className="h-4 w-4 text-destructive" />
@@ -435,8 +496,8 @@ export function NewOrderSheet({ onNewOrderClick, customer, serviceOrder, isOpen,
                                 </div>
                               ))}
                             </div>
-                            <div className="mt-2 flex items-end gap-2 p-2 rounded-md border border-dashed">
-                               <div className="flex-grow">
+                            <div className="mt-2 grid gap-2 rounded-md border border-dashed p-2 lg:grid-cols-[minmax(0,1fr)_7rem_4rem_6rem_auto] lg:items-end">
+                               <div className="min-w-0">
                                   <Label htmlFor="newItemDescription" className="text-xs">Descrição</Label>
                                   {newItem.type === 'part' ? (
                                       <Popover open={openCombobox} onOpenChange={setOpenCombobox}>
@@ -447,32 +508,42 @@ export function NewOrderSheet({ onNewOrderClick, customer, serviceOrder, isOpen,
                                               </Button>
                                           </PopoverTrigger>
                                           <PopoverContent className="w-[--radix-popover-trigger-width] p-0">
-                                              <Command>
-                                                  <CommandInput placeholder="Procurar peça..." value={newItem.description} onValueChange={(search) => setNewItem({...newItem, description: search })}/>
-                                                  <CommandList>
-                                                      <CommandEmpty>Nenhuma peça encontrada.</CommandEmpty>
-                                                      <CommandGroup>
-                                                          {stock.map((stockItem) => (
-                                                              <CommandItem key={stockItem.id} value={stockItem.name} onSelect={(currentValue) => {
-                                                                      const selected = stock.find(s => s.name.toLowerCase() === currentValue.toLowerCase());
-                                                                      if (selected) { setNewItem({ ...newItem, description: selected.name, unitPrice: selected.price }); }
-                                                                      setOpenCombobox(false);
-                                                                  }}>
-                                                                  <Check className={cn("mr-2 h-4 w-4", newItem.description.toLowerCase() === stockItem.name.toLowerCase() ? "opacity-100" : "opacity-0")} />
-                                                                  {stockItem.name}
-                                                              </CommandItem>
-                                                          ))}
-                                                      </CommandGroup>
-                                                  </CommandList>
-                                              </Command>
+                                              <div className="p-2">
+                                                <LocalAutocomplete
+                                                  items={stock}
+                                                  selectedItem={stock.find((stockItem) => stockItem.id === newItem.stockItemId) ?? null}
+                                                  onSelect={(stockItem) => {
+                                                    if (stockItem) {
+                                                      setNewItem({
+                                                        ...newItem,
+                                                        description: stockItem.name,
+                                                        unitPrice: stockItem.price,
+                                                        stockItemId: stockItem.id,
+                                                      });
+                                                      setOpenCombobox(false);
+                                                    }
+                                                  }}
+                                                  getOption={(stockItem) => ({
+                                                    item: stockItem,
+                                                    value: stockItem.name,
+                                                    keywords: [stockItem.category || '', stockItem.barcode || ''],
+                                                  })}
+                                                  renderItem={(stockItem, query) => (
+                                                    <span className="block truncate">{highlightMatch(stockItem.name, query)}</span>
+                                                  )}
+                                                  placeholder="Procurar pe�a..."
+                                                  emptyMessage="Nenhuma pe�a encontrada."
+                                                  inputClassName="border-0 shadow-none focus-visible:ring-0"
+                                                />
+                                              </div>
                                           </PopoverContent>
                                       </Popover>
-                                  ) : ( <Input id="newItemDescription" placeholder="Ex: Formatação" value={newItem.description} onChange={e => setNewItem({...newItem, description: e.target.value})} /> )}
+                                  ) : ( <Input id="newItemDescription" placeholder="Ex: Formatação" value={newItem.description} onChange={e => setNewItem({...newItem, description: e.target.value, stockItemId: undefined})} /> )}
                               </div>
-                              <div className="w-28"><Label className="text-xs">Tipo</Label><Select value={newItem.type} onValueChange={(value: 'service' | 'part') => setNewItem({...newItem, type: value, description: '', unitPrice: 0 })}><SelectTrigger><SelectValue /></SelectTrigger><SelectContent><SelectItem value="service">Serviço</SelectItem><SelectItem value="part">Peça</SelectItem></SelectContent></Select></div>
+                              <div className="w-28"><Label className="text-xs">Tipo</Label><Select value={newItem.type} onValueChange={(value: 'service' | 'part') => setNewItem({...newItem, type: value, description: '', unitPrice: 0, stockItemId: undefined })}><SelectTrigger><SelectValue /></SelectTrigger><SelectContent><SelectItem value="service">Serviço</SelectItem><SelectItem value="part">Peça</SelectItem></SelectContent></Select></div>
                               <div className="w-16"><Label htmlFor="newItemQty" className="text-xs">Qtd</Label><Input id="newItemQty" type="number" value={newItem.quantity} onChange={e => setNewItem({...newItem, quantity: parseInt(e.target.value, 10) || 1})} /></div>
                               <div className="w-24"><Label htmlFor="newItemPrice" className="text-xs">Valor R$</Label><CurrencyInput id="newItemPrice" value={newItem.unitPrice} onValueChange={(val) => setNewItem({...newItem, unitPrice: val})} disabled={newItem.type === 'part'} /></div>
-                              <Button onClick={handleAddItem} size="sm">Adicionar</Button>
+                              <Button onClick={handleAddItem} size="sm" className="w-full lg:w-auto">Adicionar</Button>
                             </div>
                             <div className="mt-4 text-right"><p className="text-lg font-bold">Total: R$ {totalValue.toLocaleString('pt-BR', { minimumFractionDigits: 2 })}</p></div>
                           </div>
@@ -500,15 +571,19 @@ export function NewOrderSheet({ onNewOrderClick, customer, serviceOrder, isOpen,
                              </div>
                              <div className="p-4 border rounded-lg border-dashed">
                                  <h4 className="font-semibold mb-2">Registrar Novo Pagamento Parcial</h4>
-                                 <div className="flex items-end gap-2">
+                                 <div className="flex flex-col gap-2 sm:flex-row sm:items-end">
                                      <div className="flex-grow space-y-1"><Label htmlFor="newPaymentAmount">Valor</Label><CurrencyInput id="newPaymentAmount" value={newPayment.amount} onValueChange={(val) => setNewPayment(p => ({...p, amount: val}))}/></div>
                                      <div className="flex-grow space-y-1"><Label htmlFor="newPaymentMethod">Método</Label>
                                          <Select value={newPayment.method} onValueChange={(v) => setNewPayment(p => ({...p, method: v}))}>
                                              <SelectTrigger><SelectValue/></SelectTrigger>
-                                             <SelectContent><SelectItem value="Dinheiro">Dinheiro</SelectItem><SelectItem value="PIX">PIX</SelectItem><SelectItem value="Cartão de Crédito">Crédito</SelectItem><SelectItem value="Cartão de Débito">Débito</SelectItem></SelectContent>
+                                             <SelectContent>
+                                                {SERVICE_ORDER_PAYMENT_METHODS.map((method) => (
+                                                  <SelectItem key={method} value={method}>{method}</SelectItem>
+                                                ))}
+                                             </SelectContent>
                                          </Select>
                                      </div>
-                                     <Button onClick={handleAddPayment} disabled={newPayment.amount <= 0 || newPayment.amount > balanceDue}>Adicionar</Button>
+                                     <Button onClick={handleAddPayment} className="w-full sm:w-auto" disabled={newPayment.amount <= 0 || newPayment.amount > balanceDue}>Adicionar</Button>
                                  </div>
                              </div>
                         </TabsContent>
@@ -531,13 +606,30 @@ export function NewOrderSheet({ onNewOrderClick, customer, serviceOrder, isOpen,
                               </div>
                           </div>
                         </TabsContent>
+                        <TabsContent value="files" className="mt-0">
+                          <ServiceOrderFilesPanel
+                            serviceOrderId={serviceOrder?.id}
+                            enabled={useSaasServiceOrders}
+                          />
+                        </TabsContent>
                       </div>
                     </ScrollArea>
                   </div>
               </Tabs>
           </div>
           <DialogFooter className="p-4 border-t flex-shrink-0 bg-card sm:justify-between">
-            <div>
+            <div className="flex flex-col gap-2 sm:flex-row">
+              {isEditing && onFinalizeRequest && (
+                <Button
+                  variant="outline"
+                  className="gap-2"
+                  onClick={handleSaveAndFinalize}
+                  disabled={status === 'Finalizado' || status === 'Entregue' || status === 'Cancelada'}
+                >
+                  <Check className="h-4 w-4" />
+                  Finalizar OS
+                </Button>
+              )}
               {isEditing && onOpenChange && (
                   <Button variant="ghost" onClick={() => onOpenChange(false)}>Fechar</Button>
               )}

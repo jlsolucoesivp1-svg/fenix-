@@ -2,7 +2,10 @@ import { NextResponse } from 'next/server';
 import type { FinancialTransaction, OSPayment, ServiceOrder } from '@/types';
 import { requirePermission } from '@/lib/server/authz';
 import { upsertServiceOrderFinalizationTransaction } from '@/lib/service-order-financial';
+import { requireSaasPermission } from '@/lib/server/saas-authz';
 import { listCollectionWithClient, upsertCollectionRecordWithClient, withTransaction } from '@/lib/server/postgres';
+import { finalizeSaasServiceOrder } from '@/lib/server/saas-service-orders';
+import { getAuthenticatedAppSession } from '@/lib/server/session';
 
 type FinalizeServiceOrderPayload = {
   orderId?: string;
@@ -20,8 +23,7 @@ type FinalizeServiceOrderResult = {
 
 export async function POST(request: Request) {
   try {
-    const authResult = await requirePermission('accessServiceOrders', 'Voce nao tem permissao para finalizar ordens de servico.');
-    if (authResult instanceof NextResponse) return authResult;
+    const appSession = await getAuthenticatedAppSession();
 
     const payload = (await request.json()) as FinalizeServiceOrderPayload;
     const orderId = payload.orderId?.trim();
@@ -33,6 +35,33 @@ export async function POST(request: Request) {
     if (!orderId) {
       return NextResponse.json({ error: 'OrderId invalido.' }, { status: 400 });
     }
+
+    if (appSession.authSource === 'supabase-only') {
+      const saasContext = await requireSaasPermission(
+        'accessServiceOrders',
+        'Modulo de ordens de servico SaaS indisponivel para a sessao atual.',
+        'Voce nao tem permissao para finalizar ordens de servico.'
+      );
+      if (saasContext instanceof NextResponse) return saasContext;
+
+      const result = await finalizeSaasServiceOrder({
+        accessToken: saasContext.accessToken,
+        companyId: saasContext.companyId,
+        authUserId: saasContext.userId,
+        actorDisplayName:
+          appSession.supabaseUser?.loginName || appSession.supabaseUser?.email || 'Nao identificado',
+        orderId,
+        newPayments,
+        newTransactions,
+        nextStatus,
+        deliveredDate,
+      });
+
+      return NextResponse.json(result);
+    }
+
+    const authResult = await requirePermission('accessServiceOrders', 'Voce nao tem permissao para finalizar ordens de servico.');
+    if (authResult instanceof NextResponse) return authResult;
 
     const result = await withTransaction(async (client) => {
       const [orders, transactions] = await Promise.all([

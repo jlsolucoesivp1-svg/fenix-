@@ -12,6 +12,8 @@ import {
 } from '@/components/ui/sidebar';
 import { BrowserSessionGuard } from '@/components/layout/browser-session-guard';
 import { HeaderActions } from '@/components/layout/header-actions';
+import { SupabaseModuleGuard } from '@/components/layout/supabase-module-guard';
+import { TenantAccessBanner } from '@/components/layout/tenant-access-banner';
 import { Logo } from '@/components/logo';
 import { MainNav } from '@/components/main-nav';
 
@@ -19,6 +21,7 @@ export function AppShell({ children }: { children: React.ReactNode }) {
   return (
     <>
       <BrowserSessionGuard />
+      <SupabaseModuleGuard />
       <SidebarProvider>
         <Sidebar>
           <SidebarHeader>
@@ -38,7 +41,10 @@ export function AppShell({ children }: { children: React.ReactNode }) {
               <Logo />
             </div>
           </header>
-          <SidebarInset>{children}</SidebarInset>
+          <SidebarInset>
+            <TenantAccessBanner />
+            {children}
+          </SidebarInset>
         </div>
       </SidebarProvider>
     </>

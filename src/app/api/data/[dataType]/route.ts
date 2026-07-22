@@ -1,5 +1,7 @@
 import { NextResponse } from 'next/server';
-import { getAuthenticatedUser } from '@/lib/server/session';
+import type { User, UserPermissions } from '@/types';
+import { normalizeIncomingPassword, sanitizeUsers } from '@/lib/server/auth';
+import { requireAuthenticatedUser, requirePermission } from '@/lib/server/authz';
 import { isCollectionDataType, isSingletonDataType } from '@/lib/server/data-types';
 import { getSingleton, listCollection, replaceCollection, saveSingleton } from '@/lib/server/postgres';
 
@@ -7,23 +9,79 @@ type RouteContext = {
   params: Promise<{ dataType: string }>;
 };
 
-const requireUser = async () => {
-  const user = await getAuthenticatedUser();
-  if (!user) {
-    return NextResponse.json({ error: 'Nao autenticado.' }, { status: 401 });
+const collectionPermissions: Partial<Record<string, keyof UserPermissions>> = {
+  customers: 'accessClients',
+  serviceOrders: 'accessServiceOrders',
+  stock: 'accessInventory',
+  sales: 'accessSales',
+  financialTransactions: 'accessFinancials',
+  appointments: 'accessAgenda',
+  quotes: 'accessQuotes',
+  kits: 'accessInventory',
+  serviceOrderViews: 'accessServiceOrders',
+};
+
+const singletonPermissions: Partial<Record<string, keyof UserPermissions>> = {
+  companyInfo: 'accessSettings',
+  settings: 'accessSettings',
+};
+
+const requireDataAccess = async (dataType: string) => {
+  if (dataType === 'users') {
+    return requirePermission('canManageUsers', 'Voce nao tem permissao para gerenciar usuarios.');
   }
-  return user;
+
+  const singletonPermission = singletonPermissions[dataType];
+  if (singletonPermission) {
+    return requirePermission(singletonPermission, 'Voce nao tem permissao para alterar configuracoes.');
+  }
+
+  const collectionPermission = collectionPermissions[dataType];
+  if (collectionPermission) {
+    return requirePermission(collectionPermission, 'Voce nao tem permissao para acessar este modulo.');
+  }
+
+  return requireAuthenticatedUser();
+};
+
+const normalizeUsersPayload = async (payload: unknown): Promise<User[]> => {
+  if (!Array.isArray(payload)) {
+    throw new Error('Payload invalido para usuarios.');
+  }
+
+  const existingUsers = await listCollection<User>('users');
+  const existingUsersById = new Map(existingUsers.map((user) => [user.id, user]));
+  const existingUsersByLogin = new Map(existingUsers.map((user) => [user.login, user]));
+
+  return Promise.all(
+    payload.map(async (item) => {
+      const user = item as User;
+      const existingUser = existingUsersById.get(user.id) ?? existingUsersByLogin.get(user.login);
+      const normalizedPassword = await normalizeIncomingPassword(user.password, existingUser?.password);
+
+      if (!normalizedPassword) {
+        throw new Error(`Usuario ${user.login || user.id || 'sem identificador'} sem senha valida.`);
+      }
+
+      return {
+        ...user,
+        password: normalizedPassword,
+      };
+    })
+  );
 };
 
 export async function GET(_request: Request, context: RouteContext) {
   try {
-    const authResult = await requireUser();
-    if (authResult instanceof NextResponse) return authResult;
-
     const { dataType } = await context.params;
+    const authResult = await requireDataAccess(dataType);
+    if (authResult instanceof NextResponse) return authResult;
 
     if (isCollectionDataType(dataType)) {
       const records = await listCollection(dataType);
+      if (dataType === 'users') {
+        return NextResponse.json(sanitizeUsers(records as User[]));
+      }
       return NextResponse.json(records);
     }
 
@@ -41,10 +99,9 @@ export async function GET(_request: Request, context: RouteContext) {
 
 export async function PUT(request: Request, context: RouteContext) {
   try {
-    const authResult = await requireUser();
-    if (authResult instanceof NextResponse) return authResult;
-
     const { dataType } = await context.params;
+    const authResult = await requireDataAccess(dataType);
+    if (authResult instanceof NextResponse) return authResult;
     const payload = await request.json();
 
     if (isCollectionDataType(dataType)) {
@@ -52,7 +109,21 @@ export async function PUT(request: Request, context: RouteContext) {
         return NextResponse.json({ error: 'Payload invalido para colecao.' }, { status: 400 });
       }
 
-      await replaceCollection(dataType, payload);
+      if (dataType === 'users') {
+        let normalizedUsers: User[];
+        try {
+          normalizedUsers = await normalizeUsersPayload(payload);
+        } catch (error) {
+          return NextResponse.json(
+            { error: error instanceof Error ? error.message : 'Payload invalido para usuarios.' },
+            { status: 400 }
+          );
+        }
+        await replaceCollection(dataType, normalizedUsers);
+      } else {
+        await replaceCollection(dataType, payload);
+      }
+
       return NextResponse.json({ success: true });
     }
 

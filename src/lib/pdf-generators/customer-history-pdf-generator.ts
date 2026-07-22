@@ -1,6 +1,7 @@
 import type { ServiceOrder } from '@/types';
-import { getCompanyInfo } from '@/lib/storage';
+import { getEffectiveCompanyInfo } from '@/lib/storage';
 import { normalizeOptionalText, normalizeText } from '@/lib/text';
+import { formatServiceOrderNumber } from '@/lib/service-order-id';
 import { jsPDF } from 'jspdf';
 import 'jspdf-autotable';
 
@@ -69,7 +70,7 @@ const loadImageAsDataUrl = (url: string | undefined): Promise<string | null> => 
 };
 
 export const generateCustomerHistoryPdf = async (history: ServiceOrder[]) => {
-  const companyInfo = normalizeText(await getCompanyInfo());
+  const companyInfo = normalizeText(await getEffectiveCompanyInfo());
   const normalizedHistory = normalizeText(history);
   const customerName = normalizedHistory[0]?.customerName || 'Cliente';
 
@@ -133,7 +134,7 @@ export const generateCustomerHistoryPdf = async (history: ServiceOrder[]) => {
     doc.rect(margin, currentY, pageWidth - margin * 2, 7, 'F');
     doc.setFontSize(11);
     doc.setFont('helvetica', 'bold');
-    doc.text(`Ordem de Serviço #${order.id.slice(-4)}`, margin + 2, currentY + 5);
+    doc.text(`Ordem de Serviço #${formatServiceOrderNumber(order.id)}`, margin + 2, currentY + 5);
     doc.setFontSize(10);
     doc.text(`Status: ${order.status}`, pageWidth - margin - 2, currentY + 5, { align: 'right' });
     currentY += 12;

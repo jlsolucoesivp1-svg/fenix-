@@ -1,7 +1,15 @@
 import crypto from 'node:crypto';
 import { cookies } from 'next/headers';
 import type { User } from '@/types';
+import type {
+  AppSessionAuthSource,
+  AppSessionSnapshot,
+  SupabaseAuthUserSummary,
+  TenantContext,
+} from '@/types/saas';
 import { getUserById } from './postgres';
+import { getSaasUserPermissions } from './saas-users';
+import { getSupabaseSessionState } from './supabase-session';
 
 const SESSION_COOKIE_NAME = 'assistec-now-session';
 const DEFAULT_SESSION_TTL_SECONDS = 60 * 60 * 24 * 7;
@@ -11,7 +19,17 @@ type SessionPayload = {
   expiresAt: number;
 };
 
-const getSessionSecret = () => process.env.SESSION_SECRET || 'fenix-dev-session-secret-change-me';
+export interface AuthenticatedAppSession extends AppSessionSnapshot {
+  user: User | null;
+}
+
+const getSessionSecret = () => {
+  const secret = process.env.SESSION_SECRET?.trim();
+  if (!secret) {
+    throw new Error('SESSION_SECRET nao configurado.');
+  }
+  return secret;
+};
 
 const shouldUseSecureCookie = () => {
   if (process.env.SESSION_COOKIE_SECURE === 'true') return true;
@@ -81,6 +99,11 @@ export const clearSessionCookie = async () => {
 };
 
 export const getAuthenticatedUser = async (): Promise<User | null> => {
+  const session = await getAuthenticatedAppSession();
+  return session.user;
+};
+
+const getLegacyAuthenticatedUser = async (): Promise<User | null> => {
   const cookieStore = await cookies();
   const sessionToken = cookieStore.get(SESSION_COOKIE_NAME)?.value;
   if (!sessionToken) return null;
@@ -89,4 +112,57 @@ export const getAuthenticatedUser = async (): Promise<User | null> => {
   if (!payload) return null;
 
   return getUserById<User>(payload.userId);
+};
+
+export const getAuthenticatedAppSession = async (): Promise<AuthenticatedAppSession> => {
+  const [legacyUser, supabaseSession] = await Promise.all([
+    getLegacyAuthenticatedUser(),
+    getSupabaseSessionState(),
+  ]);
+  const supabasePermissions =
+    supabaseSession?.tenantAccess.canAccessTenant && supabaseSession.tenantAccess.activeCompanyId
+      ? await getSaasUserPermissions(supabaseSession.tenantAccess.activeCompanyId, supabaseSession.user.id)
+      : null;
+
+  if (legacyUser && supabaseSession) {
+    return {
+      authSource: 'legacy+supabase',
+      user: legacyUser,
+      tenantContext: supabaseSession.tenantContext,
+      supabaseUser: supabaseSession.user,
+      tenantAccess: supabaseSession.tenantAccess,
+      effectivePermissions: legacyUser.permissions,
+    };
+  }
+
+  if (legacyUser) {
+    return {
+      authSource: 'legacy',
+      user: legacyUser,
+      tenantContext: null,
+      supabaseUser: null,
+      tenantAccess: null,
+      effectivePermissions: legacyUser.permissions,
+    };
+  }
+
+  if (supabaseSession) {
+    return {
+      authSource: 'supabase-only',
+      user: null,
+      tenantContext: supabaseSession.tenantContext,
+      supabaseUser: supabaseSession.user,
+      tenantAccess: supabaseSession.tenantAccess,
+      effectivePermissions: supabasePermissions,
+    };
+  }
+
+  return {
+    authSource: 'none',
+      user: null,
+      tenantContext: null,
+      supabaseUser: null,
+      tenantAccess: null,
+      effectivePermissions: null,
+    };
 };

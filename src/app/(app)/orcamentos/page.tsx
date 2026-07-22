@@ -1,5 +1,4 @@
-
-'use client';
+﻿'use client';
 
 import * as React from 'react';
 import { MoreHorizontal, FileText, ShoppingCart, Printer, PlusCircle, ArrowLeft, Trash2, ScanLine, UserPlus, ChevronsUpDown, Check, X } from 'lucide-react';
@@ -12,23 +11,87 @@ import { AlertDialog, AlertDialogAction, AlertDialogCancel, AlertDialogContent, 
 import { Input, CurrencyInput } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
-import { getQuotes, saveQuotes, getSales, saveSales, getFinancialTransactions, saveFinancialTransactions, getCustomers, getStock, getKits, saveCustomers, getCompanyInfo } from '@/lib/storage';
+import {
+    createTenantCustomer,
+    createTenantQuote,
+    deleteTenantQuote,
+    getCompanyInfo,
+    getCustomers,
+    finalizarVenda,
+    getFinancialTransactions,
+    getKits,
+    getQuotes,
+    getSales,
+    getStock,
+    getTenantCompanyInfo,
+    listTenantCustomers,
+    listTenantKits,
+    listTenantProducts,
+    listTenantQuotes,
+    saveCustomers,
+    saveFinancialTransactions,
+    saveQuotes,
+    saveSales,
+    searchTenantCustomers,
+    updateTenantQuote,
+} from '@/lib/storage';
 import type { Quote, Sale, FinancialTransaction, Customer, StockItem, SaleItem, Kit } from '@/types';
 import { useToast } from '@/hooks/use-toast';
 import { cn } from '@/lib/utils';
 import { useCurrentUser } from '@/hooks/use-current-user';
+import { useCurrentAppSession } from '@/hooks/use-current-app-session';
 import { addDays } from 'date-fns';
 import { ManualAddItemDialog } from '@/components/sales/manual-add-item-dialog';
 import jsPDF from 'jspdf';
 import 'jspdf-autotable';
 import { Textarea } from '@/components/ui/textarea';
+import { CustomerAutocomplete } from '@/components/customers/customer-autocomplete';
+import { DebouncedSearchInput } from '@/components/ui/debounced-search-input';
+import { ModuleLoadingState, ModuleState } from '@/components/ui/module-state';
 
 // --- Helper Functions ---
+
+const DEFAULT_QUOTE_VALIDITY_DAYS = 3;
 
 const formatDate = (dateString: string) => {
     if (!dateString) return 'Data inválida';
     const date = new Date(dateString);
     return date.toLocaleDateString('pt-BR', { timeZone: 'UTC' });
+};
+
+const resolveQuoteValidityDays = (quote?: Quote | null) => {
+    if (!quote) return DEFAULT_QUOTE_VALIDITY_DAYS;
+
+    const storedDays = quote.validityDays ?? quote.dias_validade;
+    if (typeof storedDays === 'number' && Number.isFinite(storedDays) && storedDays > 0) {
+        return Math.floor(storedDays);
+    }
+
+    if (quote.date && (quote.validUntil || quote.data_vencimento)) {
+        const startDate = new Date(`${quote.date}T00:00:00`);
+        const endDate = new Date(`${quote.validUntil || quote.data_vencimento}T00:00:00`);
+        const diffInDays = Math.round((endDate.getTime() - startDate.getTime()) / (1000 * 60 * 60 * 24));
+        if (Number.isFinite(diffInDays) && diffInDays > 0) {
+            return diffInDays;
+        }
+    }
+
+    return DEFAULT_QUOTE_VALIDITY_DAYS;
+};
+
+const buildQuoteValidUntil = (quoteDate: string, validityDays: number) =>
+    addDays(new Date(`${quoteDate}T00:00:00`), validityDays).toISOString().split('T')[0];
+
+const parseCustomerAddress = (customer: Customer) => {
+    const rawAddress = (customer.address || '').trim();
+    const [streetSection = '', localitySection = ''] = rawAddress.split('|').map((part) => part.trim());
+    const [district = '', city = '', state = ''] = localitySection.split('-').map((part) => part.trim()).filter(Boolean);
+
+    return {
+        addressLine: [streetSection, district].filter(Boolean).join(' - ') || rawAddress || 'Não informado',
+        cityLine: [city, state].filter(Boolean).join(' - '),
+        cepLine: customer.cep ? `CEP: ${customer.cep}` : '',
+    };
 };
 
 const getStatusVariant = (status: Quote['status']) => {
@@ -70,7 +133,20 @@ const loadImageAsDataUrl = (url: string | undefined): Promise<string | null> => 
 
 // --- Sub-Components ---
 
-function QuoteTable({ quotes, onEdit, onStatusChange, onConvertToSale, onDelete, onSearch, statusFilter, onStatusFilterChange, searchFilter }) {
+interface QuoteTableProps {
+    quotes: Quote[];
+    canConvertToSale: boolean;
+    onEdit: (quote: Quote | null) => void;
+    onStatusChange: (quoteId: string, status: Quote['status']) => void;
+    onConvertToSale: (quote: Quote) => void;
+    onDelete: (quoteId: string) => void;
+    onSearch: (value: string) => void;
+    statusFilter: string;
+    onStatusFilterChange: (value: string) => void;
+    searchFilter: string;
+}
+
+function QuoteTable({ quotes, canConvertToSale, onEdit, onStatusChange, onConvertToSale, onDelete, onSearch, statusFilter, onStatusFilterChange, searchFilter }: QuoteTableProps) {
     const filteredQuotes = React.useMemo(() => {
         let result = [...quotes];
         if (statusFilter !== 'todos') {
@@ -116,11 +192,11 @@ function QuoteTable({ quotes, onEdit, onStatusChange, onConvertToSale, onDelete,
             </CardHeader>
             <CardContent>
                 <div className="mb-4">
-                    <Input
+                    <DebouncedSearchInput
+                        defaultValue={searchFilter}
+                        onDebouncedChange={onSearch}
                         placeholder="Filtrar por cliente ou nº do orçamento..."
                         className="max-w-sm"
-                        value={searchFilter}
-                        onChange={(e) => onSearch(e.target.value)}
                     />
                 </div>
                 <Table>
@@ -141,7 +217,7 @@ function QuoteTable({ quotes, onEdit, onStatusChange, onConvertToSale, onDelete,
                                 <TableCell className="font-medium">#{quote.id.slice(-6)}</TableCell>
                                 <TableCell>{quote.customerName || 'Não informado'}</TableCell>
                                 <TableCell className="hidden sm:table-cell">{formatDate(quote.date)}</TableCell>
-                                <TableCell className="hidden md:table-cell">{formatDate(quote.validUntil)}</TableCell>
+                                <TableCell className="hidden md:table-cell">{formatDate(quote.validUntil || quote.data_vencimento || buildQuoteValidUntil(quote.date, resolveQuoteValidityDays(quote)))}</TableCell>
                                 <TableCell>R$ {quote.total.toFixed(2)}</TableCell>
                                 <TableCell>
                                     <Badge variant="outline" className={cn('font-semibold', getStatusVariant(quote.status))}>
@@ -149,7 +225,7 @@ function QuoteTable({ quotes, onEdit, onStatusChange, onConvertToSale, onDelete,
                                     </Badge>
                                 </TableCell>
                                 <TableCell className="text-right">
-                                    <DropdownMenu>
+                                    <DropdownMenu modal={false}>
                                         <DropdownMenuTrigger asChild>
                                             <Button aria-haspopup="true" size="icon" variant="ghost">
                                                 <MoreHorizontal className="h-4 w-4" />
@@ -160,7 +236,7 @@ function QuoteTable({ quotes, onEdit, onStatusChange, onConvertToSale, onDelete,
                                             <DropdownMenuItem onSelect={() => onEdit(quote)}>
                                                 <FileText className="mr-2"/>Ver / Editar
                                             </DropdownMenuItem>
-                                             {quote.status === 'Aprovado' && (
+                                             {canConvertToSale && quote.status === 'Aprovado' && (
                                                 <DropdownMenuItem onSelect={() => onConvertToSale(quote)} className="text-green-500 focus:text-green-500">
                                                     <ShoppingCart className="mr-2"/>Converter em Venda
                                                 </DropdownMenuItem>
@@ -201,7 +277,19 @@ function QuoteTable({ quotes, onEdit, onStatusChange, onConvertToSale, onDelete,
                         ))}
                          {filteredQuotes.length === 0 && (
                             <TableRow>
-                                <TableCell colSpan={7} className="h-24 text-center">Nenhum orçamento encontrado.</TableCell>
+                                <TableCell colSpan={7} className="p-6">
+                                    <ModuleState
+                                        title="Nenhum orcamento encontrado"
+                                        description={
+                                            quotes.length === 0
+                                                ? 'Ainda nao existem orcamentos cadastrados no contexto atual.'
+                                                : 'Os filtros aplicados nao retornaram orcamentos.'
+                                        }
+                                        compact
+                                        actionLabel={quotes.length === 0 ? 'Novo orcamento' : 'Limpar busca'}
+                                        onAction={quotes.length === 0 ? () => onEdit(null) : () => onSearch('')}
+                                    />
+                                </TableCell>
                             </TableRow>
                         )}
                     </TableBody>
@@ -211,7 +299,14 @@ function QuoteTable({ quotes, onEdit, onStatusChange, onConvertToSale, onDelete,
     );
 }
 
-function QuoteBuilderPage({ quote, onBack, onSave }) {
+interface QuoteBuilderPageProps {
+    quote: Quote | null;
+    useSaasQuotes: boolean;
+    onBack: () => void;
+    onSave: (quote: Quote) => void;
+}
+
+function QuoteBuilderPage({ quote, useSaasQuotes, onBack, onSave }: QuoteBuilderPageProps) {
     const { toast } = useToast();
     const { user: currentUser } = useCurrentUser();
     
@@ -224,20 +319,43 @@ function QuoteBuilderPage({ quote, onBack, onSave }) {
     const [discount, setDiscount] = React.useState(0);
     const [observations, setObservations] = React.useState('');
     const [barcode, setBarcode] = React.useState('');
+    const [validityDays, setValidityDays] = React.useState(DEFAULT_QUOTE_VALIDITY_DAYS);
 
     const [isAddCustomerOpen, setIsAddCustomerOpen] = React.useState(false);
     const [isManualAddOpen, setIsManualAddOpen] = React.useState(false);
     const [newCustomer, setNewCustomer] = React.useState<Omit<Customer, 'id'>>({ name: '', phone: '', email: '', address: '', document: '' });
     
     React.useEffect(() => {
+        let cancelled = false;
+
         const loadPrerequisites = async () => {
-          const [customersData, stockData, kitsData] = await Promise.all([ getCustomers(), getStock(), getKits() ]);
-          setCustomers(customersData);
-          setStock(stockData);
-          setKits(kitsData);
+          try {
+            const [customersData, stockData, kitsData] = await Promise.all(
+              useSaasQuotes
+                ? [listTenantCustomers(), listTenantProducts(), listTenantKits()]
+                : [getCustomers(), getStock(), getKits()]
+            );
+            if (cancelled) return;
+
+            setCustomers(customersData);
+            setStock(stockData);
+            setKits(kitsData);
+          } catch (error) {
+            if (!cancelled) {
+              toast({
+                variant: 'destructive',
+                title: 'Erro ao carregar dados do orcamento',
+                description: error instanceof Error ? error.message : 'Nao foi possivel carregar clientes, produtos e kits.',
+              });
+            }
+          }
         };
-        loadPrerequisites();
-    }, []);
+        void loadPrerequisites();
+
+        return () => {
+          cancelled = true;
+        };
+    }, [toast, useSaasQuotes]);
 
     React.useEffect(() => {
       if (quote) {
@@ -245,12 +363,14 @@ function QuoteBuilderPage({ quote, onBack, onSave }) {
         setItems(quote.items);
         setDiscount(quote.discount || 0);
         setObservations(quote.observations || '');
+        setValidityDays(resolveQuoteValidityDays(quote));
       } else {
         setSelectedCustomerId(undefined);
         setItems([]);
         setDiscount(0);
         setObservations('');
         setBarcode('');
+        setValidityDays(DEFAULT_QUOTE_VALIDITY_DAYS);
       }
     }, [quote]);
 
@@ -318,10 +438,18 @@ function QuoteBuilderPage({ quote, onBack, onSave }) {
 
     const handleSaveNewCustomer = async () => {
         if (!newCustomer.name) { toast({ variant: 'destructive', title: 'Nome obrigatório' }); return; }
-        const customerToAdd: Customer = { ...newCustomer, id: `CUST-${Date.now()}` };
-        const updatedCustomers = [...customers, customerToAdd];
-        await saveCustomers(updatedCustomers);
-        setCustomers(updatedCustomers);
+        const customerToAdd: Customer = useSaasQuotes
+          ? await createTenantCustomer(newCustomer)
+          : { ...newCustomer, id: `CUST-${Date.now()}` };
+
+        if (!useSaasQuotes) {
+          const updatedCustomers = [...customers, customerToAdd];
+          await saveCustomers(updatedCustomers);
+          setCustomers(updatedCustomers);
+        } else {
+          setCustomers((prev) => [...prev, customerToAdd].sort((a, b) => a.name.localeCompare(b.name)));
+        }
+
         setSelectedCustomerId(customerToAdd.id);
         setIsAddCustomerOpen(false);
         toast({ title: 'Cliente adicionado!', description: `${customerToAdd.name} foi salvo.` });
@@ -330,29 +458,51 @@ function QuoteBuilderPage({ quote, onBack, onSave }) {
     const subtotal = items.reduce((acc, item) => acc + (item.price || 0) * (item.quantity || 0), 0);
     const total = subtotal - discount;
 
-    const handleSaveQuote = () => {
-        if (!selectedCustomerId) { toast({ variant: "destructive", title: "Cliente não selecionado" }); return; }
-        if (items.length === 0) { toast({ variant: "destructive", title: "Nenhum item adicionado" }); return; }
+    const buildDraftQuote = (): Quote | null => {
+        if (!selectedCustomerId) { toast({ variant: "destructive", title: "Cliente não selecionado" }); return null; }
+        if (items.length === 0) { toast({ variant: "destructive", title: "Nenhum item adicionado" }); return null; }
+
         const customer = customers.find(c => c.id === selectedCustomerId);
-        const finalQuote: Quote = {
+        const quoteDate = quote?.date || new Date().toISOString().split('T')[0];
+        const sanitizedValidityDays = Number.isFinite(validityDays) && validityDays > 0
+            ? Math.floor(validityDays)
+            : DEFAULT_QUOTE_VALIDITY_DAYS;
+        const validUntil = buildQuoteValidUntil(quoteDate, sanitizedValidityDays);
+
+        return {
             id: quote?.id || `QUOTE-${Date.now()}`,
-            date: quote?.date || new Date().toISOString().split('T')[0],
+            date: quoteDate,
             time: quote?.time || new Date().toLocaleTimeString('pt-BR'),
             user: currentUser?.name || 'Não identificado',
-            items, subtotal, discount, total,
+            items,
+            subtotal,
+            discount,
+            total,
             status: quote?.status || 'Pendente',
-            validUntil: addDays(new Date(), 3).toISOString().split('T')[0],
-            observations, customerId: selectedCustomerId, customerName: customer?.name,
+            validUntil,
+            data_vencimento: validUntil,
+            validityDays: sanitizedValidityDays,
+            dias_validade: sanitizedValidityDays,
+            observations,
+            customerId: selectedCustomerId,
+            customerName: customer?.name,
         };
+    };
+
+    const handleSaveQuote = () => {
+        const finalQuote = buildDraftQuote();
+        if (!finalQuote) return;
         onSave(finalQuote);
     };
 
     const generatePdf = async () => {
-        const customer = customers.find(c => c.id === selectedCustomerId);
+        const draftQuote = buildDraftQuote();
+        if (!draftQuote) { return; }
+        const customer = customers.find(c => c.id === draftQuote.customerId);
         if (!customer) { toast({variant: 'destructive', title: 'Selecione um cliente'}); return; }
-        if (items.length === 0) { toast({variant: 'destructive', title: 'Adicione itens ao orçamento'}); return; }
-        const companyInfo = await getCompanyInfo();
+        const companyInfo = useSaasQuotes ? await getTenantCompanyInfo() : await getCompanyInfo();
         const logoDataUrl = await loadImageAsDataUrl(companyInfo.logoUrl);
+        const customerAddress = parseCustomerAddress(customer);
         const doc = new jsPDF();
         const pageWidth = doc.internal.pageSize.getWidth();
         const margin = 15;
@@ -379,8 +529,8 @@ function QuoteBuilderPage({ quote, onBack, onSave }) {
         doc.text(`Orçamento`, rightHeaderX, currentY - 8, { align: 'right' });
         doc.setFontSize(10);
         doc.setFont('helvetica', 'normal');
-        doc.text(`Nº: #${(quote?.id || 'NOVO').slice(-6)}`, rightHeaderX, currentY - 2, { align: 'right' });
-        doc.text(`Data Emissão: ${new Date().toLocaleDateString('pt-BR')}`, rightHeaderX, currentY + 4, { align: 'right' });
+        doc.text(`Nº: #${draftQuote.id.slice(-6)}`, rightHeaderX, currentY - 2, { align: 'right' });
+        doc.text(`Data Emissão: ${formatDate(draftQuote.date)}`, rightHeaderX, currentY + 4, { align: 'right' });
         currentY = 50;
         const boxWidth = (pageWidth - margin * 2);
         doc.setFillColor(243, 244, 246);
@@ -389,7 +539,14 @@ function QuoteBuilderPage({ quote, onBack, onSave }) {
         doc.setFont('helvetica', 'bold');
         doc.text('Dados do Cliente', margin + 3, currentY + 5);
         currentY += 7;
-        const customerInfo = { 'Nome:': customer.name, 'Telefone:': customer.phone, 'Documento:': customer.document || "Não informado" };
+        const customerInfo = {
+            'Nome:': customer.name || 'Não informado',
+            'CPF/CNPJ:': customer.document || 'Não informado',
+            'Telefone:': customer.phone || 'Não informado',
+            'Endereço:': customerAddress.addressLine,
+            'Cidade/UF:': customerAddress.cityLine || 'Não informado',
+            'CEP:': customer.cep || 'Não informado',
+        };
         (doc as any).autoTable({ body: Object.entries(customerInfo), startY: currentY, theme: 'grid', tableWidth: boxWidth, margin: { left: margin }, styles: { fontSize: 9, cellPadding: 2, lineColor: [200,200,200], lineWidth: 0.1 }, columnStyles: { 0: { fontStyle: 'bold', cellWidth: 35 } } });
         currentY = (doc as any).lastAutoTable.finalY + 8;
         (doc as any).autoTable({
@@ -404,12 +561,11 @@ function QuoteBuilderPage({ quote, onBack, onSave }) {
         currentY = (doc as any).lastAutoTable.finalY + 10;
         doc.setFontSize(9);
         doc.setFont('helvetica', 'bold');
-        doc.text("Validade e Condições:", margin, currentY);
+        doc.text("Validade do Orçamento:", margin, currentY);
         currentY += 5;
         doc.setFontSize(8);
         doc.setFont('helvetica', 'normal');
-        const validUntilDate = addDays(new Date(), 3).toLocaleDateString('pt-BR');
-        doc.text(`Este orçamento é válido por até ${validUntilDate}.`, margin, currentY);
+        doc.text(`Válido até: ${formatDate(draftQuote.validUntil)}`, margin, currentY);
         doc.autoPrint();
         doc.output('dataurlnewwindow');
     };
@@ -469,7 +625,15 @@ function QuoteBuilderPage({ quote, onBack, onSave }) {
                             <div className="space-y-2">
                                 <Label htmlFor="customer">Cliente</Label>
                                 <div className="flex gap-2">
-                                <Select value={selectedCustomerId} onValueChange={setSelectedCustomerId}><SelectTrigger><SelectValue placeholder="Selecione um cliente" /></SelectTrigger><SelectContent>{customers.map(c => <SelectItem key={c.id} value={c.id}>{c.name}</SelectItem>)}</SelectContent></Select>
+                                <CustomerAutocomplete
+                                  id="customer"
+                                  selectedCustomer={customers.find((c) => c.id === selectedCustomerId) ?? null}
+                                  onSelect={(customer) => setSelectedCustomerId(customer?.id)}
+                                  searchFunction={useSaasQuotes ? searchTenantCustomers : undefined}
+                                  placeholder="Buscar cliente para o orçamento..."
+                                  emptyMessage="Nenhum cliente encontrado."
+                                  className="flex-1"
+                                />
                                 <Button variant="outline" size="icon" onClick={() => setIsAddCustomerOpen(true)}><UserPlus /></Button>
                                 </div>
                             </div>
@@ -480,6 +644,19 @@ function QuoteBuilderPage({ quote, onBack, onSave }) {
                              <div className="space-y-2">
                                 <Label htmlFor="observations">Observações</Label>
                                 <Textarea id="observations" placeholder="Condições, detalhes, etc." value={observations} onChange={e => setObservations(e.target.value)} rows={4}/>
+                            </div>
+                            <div className="space-y-2">
+                                <Label htmlFor="validityDays">Validade do orçamento (dias)</Label>
+                                <Input
+                                  id="validityDays"
+                                  type="number"
+                                  min={1}
+                                  value={validityDays}
+                                  onChange={(e) => setValidityDays(Math.max(1, parseInt(e.target.value, 10) || DEFAULT_QUOTE_VALIDITY_DAYS))}
+                                />
+                                <p className="text-xs text-muted-foreground">
+                                  Válido até: {formatDate(buildQuoteValidUntil(quote?.date || new Date().toISOString().split('T')[0], validityDays))}
+                                </p>
                             </div>
                         </CardContent>
                     </Card>
@@ -502,20 +679,43 @@ function QuoteBuilderPage({ quote, onBack, onSave }) {
 
 export default function OrcamentosPage() {
     const { toast } = useToast();
+    const session = useCurrentAppSession();
     const [view, setView] = React.useState<'list' | 'builder'>('list');
     const [quotes, setQuotes] = React.useState<Quote[]>([]);
     const [isLoading, setIsLoading] = React.useState(true);
     const [statusFilter, setStatusFilter] = React.useState('Pendente');
     const [searchFilter, setSearchFilter] = React.useState('');
     const [editingQuote, setEditingQuote] = React.useState<Quote | null>(null);
+    const [loadError, setLoadError] = React.useState<string | null>(null);
     
-    React.useEffect(() => { loadData(); }, []);
+    const useSaasQuotes =
+      session.authSource === 'supabase-only' && session.tenantAccess?.canAccessTenant === true;
+
+    React.useEffect(() => {
+      if (session.isLoading) {
+        return;
+      }
+
+      void loadData();
+    }, [session.isLoading, useSaasQuotes]);
 
     const loadData = async () => {
-        setIsLoading(true);
-        const loadedQuotes = await getQuotes();
-        setQuotes(loadedQuotes.sort((a, b) => new Date(b.date).getTime() - new Date(a.date).getTime()));
-        setIsLoading(false);
+        try {
+          setIsLoading(true);
+          setLoadError(null);
+          const loadedQuotes = useSaasQuotes ? await listTenantQuotes() : await getQuotes();
+          setQuotes(loadedQuotes.sort((a, b) => new Date(b.date).getTime() - new Date(a.date).getTime()));
+        } catch (error) {
+          const message = error instanceof Error ? error.message : 'Nao foi possivel carregar os orcamentos.';
+          setLoadError(message);
+          toast({
+            variant: 'destructive',
+            title: 'Erro ao carregar orcamentos',
+            description: message,
+          });
+        } finally {
+          setIsLoading(false);
+        }
     };
 
     const handleEditQuote = (quote: Quote | null) => {
@@ -531,27 +731,100 @@ export default function OrcamentosPage() {
     const handleSaveQuote = async (savedQuote: Quote) => {
         let updatedQuotes;
         const quoteExists = quotes.some(q => q.id === savedQuote.id);
-        if (quoteExists) {
-            updatedQuotes = quotes.map(q => q.id === savedQuote.id ? savedQuote : q);
-            toast({ title: 'Orçamento Atualizado!', description: `O orçamento #${savedQuote.id.slice(-6)} foi salvo.` });
-        } else {
-            updatedQuotes = [savedQuote, ...quotes];
-            toast({ title: 'Orçamento Salvo!', description: `O orçamento #${savedQuote.id.slice(-6)} foi criado.` });
+        try {
+            const persistedQuote = useSaasQuotes
+              ? quoteExists
+                ? await updateTenantQuote(savedQuote)
+                : await createTenantQuote(savedQuote)
+              : savedQuote;
+
+            if (quoteExists) {
+                updatedQuotes = quotes.map(q => q.id === persistedQuote.id ? persistedQuote : q);
+                toast({ title: 'Orçamento Atualizado!', description: `O orçamento #${persistedQuote.id.slice(-6)} foi salvo.` });
+            } else {
+                updatedQuotes = [persistedQuote, ...quotes];
+                toast({ title: 'Orçamento Salvo!', description: `O orçamento #${persistedQuote.id.slice(-6)} foi criado.` });
+            }
+            updatedQuotes.sort((a, b) => new Date(b.date).getTime() - new Date(a.date).getTime());
+            setQuotes(updatedQuotes);
+            if (!useSaasQuotes) {
+              await saveQuotes(updatedQuotes);
+            }
+            setView('list');
+        } catch (error) {
+            toast({
+              variant: 'destructive',
+              title: 'Erro ao salvar orcamento',
+              description: error instanceof Error ? error.message : 'Nao foi possivel salvar o orcamento.',
+            });
         }
-        updatedQuotes.sort((a, b) => new Date(b.date).getTime() - new Date(a.date).getTime());
-        setQuotes(updatedQuotes);
-        await saveQuotes(updatedQuotes);
-        setView('list');
     };
 
     const handleQuickStatusChange = async (quoteId: string, status: Quote['status']) => {
-        const updatedQuotes = quotes.map(q => q.id === quoteId ? { ...q, status } : q);
-        setQuotes(updatedQuotes);
-        await saveQuotes(updatedQuotes);
-        toast({ title: 'Status Alterado!', description: `O orçamento #${quoteId.slice(-6)} foi atualizado.` });
+        const currentQuote = quotes.find(q => q.id === quoteId);
+        if (!currentQuote) return;
+
+        const updatedQuote = { ...currentQuote, status };
+
+        try {
+            if (useSaasQuotes) {
+              await updateTenantQuote(updatedQuote);
+            }
+
+            const updatedQuotes = quotes.map(q => q.id === quoteId ? updatedQuote : q);
+            setQuotes(updatedQuotes);
+            if (!useSaasQuotes) {
+              await saveQuotes(updatedQuotes);
+            }
+            toast({ title: 'Status Alterado!', description: `O orçamento #${quoteId.slice(-6)} foi atualizado.` });
+        } catch (error) {
+            toast({
+              variant: 'destructive',
+              title: 'Erro ao atualizar status',
+              description: error instanceof Error ? error.message : 'Nao foi possivel atualizar o status do orcamento.',
+            });
+        }
     };
 
     const handleConvertToSale = async (quote: Quote) => {
+        if (useSaasQuotes) {
+          try {
+            const saleId = `SALE-${Date.now()}`;
+            const result = await finalizarVenda({
+              saleId,
+              items: quote.items,
+              discount: quote.discount,
+              paymentMethod: 'pix',
+              observations: `Venda gerada a partir do orçamento #${quote.id.slice(-6)}. ${quote.observations || ''}`.trim(),
+              customerId: quote.customerId,
+              customerName: quote.customerName,
+              relatedQuoteId: quote.id,
+              userName: quote.user,
+              installments: {
+                enabled: false,
+                count: 0,
+              },
+            });
+
+            setQuotes((currentQuotes) =>
+              currentQuotes.map((currentQuote) =>
+                currentQuote.id === quote.id ? { ...currentQuote, status: 'Vendido' } : currentQuote
+              )
+            );
+            toast({
+              title: 'Orçamento Convertido em Venda!',
+              description: `A Venda #${result.sale.id.slice(-6)} foi criada no runtime SaaS.`,
+            });
+          } catch (error) {
+            toast({
+              variant: 'destructive',
+              title: 'Erro ao converter orçamento',
+              description: error instanceof Error ? error.message : 'Nao foi possivel converter o orcamento em venda.',
+            });
+          }
+          return;
+        }
+
         const newSale: Sale = {
             id: `SALE-${Date.now()}`,
             relatedQuoteId: quote.id,
@@ -565,6 +838,7 @@ export default function OrcamentosPage() {
             paymentMethod: 'A definir',
             observations: `Venda gerada a partir do orçamento #${quote.id.slice(-6)}. ${quote.observations || ''}`.trim(),
             customerId: quote.customerId,
+            customerName: quote.customerName,
         };
         const newTransaction: FinancialTransaction = {
             id: `FIN-${Date.now()}`,
@@ -585,23 +859,55 @@ export default function OrcamentosPage() {
     };
     
     const handleDeleteQuote = async (quoteId: string) => {
-        const updatedQuotes = quotes.filter(q => q.id !== quoteId);
-        setQuotes(updatedQuotes);
-        await saveQuotes(updatedQuotes);
-        toast({ variant: 'destructive', title: 'Orçamento Excluído!', description: 'O orçamento foi removido permanentemente.' });
+        try {
+            if (useSaasQuotes) {
+              await deleteTenantQuote(quoteId);
+            }
+
+            const updatedQuotes = quotes.filter(q => q.id !== quoteId);
+            setQuotes(updatedQuotes);
+            if (!useSaasQuotes) {
+              await saveQuotes(updatedQuotes);
+            }
+            toast({ variant: 'destructive', title: 'Orçamento Excluído!', description: 'O orçamento foi removido permanentemente.' });
+        } catch (error) {
+            toast({
+              variant: 'destructive',
+              title: 'Erro ao excluir orcamento',
+              description: error instanceof Error ? error.message : 'Nao foi possivel excluir o orcamento.',
+            });
+        }
     };
 
-    if (isLoading) {
-        return <div>Carregando orçamentos...</div>;
+    if (session.isLoading || isLoading) {
+        return (
+            <ModuleLoadingState
+                title="Carregando orcamentos"
+                description="Sincronizando lista e dados comerciais do contexto atual."
+            />
+        );
+    }
+
+    if (loadError) {
+        return (
+            <ModuleState
+                title="Nao foi possivel carregar orcamentos"
+                description={loadError}
+                tone="destructive"
+                actionLabel="Tentar novamente"
+                onAction={() => void loadData()}
+            />
+        );
     }
 
     if (view === 'builder') {
-        return <QuoteBuilderPage quote={editingQuote} onBack={handleBackToList} onSave={handleSaveQuote} />;
+        return <QuoteBuilderPage quote={editingQuote} useSaasQuotes={useSaasQuotes} onBack={handleBackToList} onSave={handleSaveQuote} />;
     }
 
     return (
-        <QuoteTable 
+            <QuoteTable
             quotes={quotes}
+            canConvertToSale={true}
             onEdit={handleEditQuote}
             onStatusChange={handleQuickStatusChange}
             onConvertToSale={handleConvertToSale}
@@ -613,7 +919,3 @@ export default function OrcamentosPage() {
         />
     );
 }
-
-    
-
-    

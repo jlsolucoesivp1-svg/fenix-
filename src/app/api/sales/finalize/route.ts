@@ -1,9 +1,11 @@
-import { addMonths, format } from 'date-fns';
 import { NextResponse } from 'next/server';
 import type { Customer, FinancialTransaction, Sale, SaleItem, StockItem } from '@/types';
 import { requirePermission } from '@/lib/server/authz';
 import { listCollectionWithClient, upsertCollectionRecordWithClient, withTransaction } from '@/lib/server/postgres';
-import { getPosPaymentMethodLabel } from '@/lib/payment-methods';
+import { requireSaasPermission } from '@/lib/server/saas-authz';
+import { finalizeSaasSale } from '@/lib/server/saas-sales';
+import { getAuthenticatedAppSession } from '@/lib/server/session';
+import { applySaleToStock, buildSaleFinancialTransactions, buildSaleRecord, sanitizeSaleItems } from '@/lib/sales';
 
 type FinalizeSalePayload = {
   saleId?: string;
@@ -13,6 +15,7 @@ type FinalizeSalePayload = {
   observations?: string;
   customerId?: string;
   customerName?: string;
+  relatedQuoteId?: string;
   userName?: string;
   installments?: {
     enabled: boolean;
@@ -28,26 +31,9 @@ type FinalizeSaleResult = {
   transactions: FinancialTransaction[];
 };
 
-const toIsoDate = (value: Date) => format(value, 'yyyy-MM-dd');
-
-const buildSaleDescription = ({
-  customerName,
-  productNames,
-  paymentMethodLabel,
-  total,
-  saleDate,
-}: {
-  customerName?: string;
-  productNames: string;
-  paymentMethodLabel: string;
-  total: number;
-  saleDate: string;
-}) => `Cliente: ${customerName || 'Nao identificado'} | Produto(s): ${productNames} | Pagamento: ${paymentMethodLabel} | Valor Total: R$ ${total.toFixed(2)} | Data: ${saleDate}`;
-
 export async function POST(request: Request) {
   try {
-    const authResult = await requirePermission('accessSales', 'Voce nao tem permissao para finalizar vendas.');
-    if (authResult instanceof NextResponse) return authResult;
+    const appSession = await getAuthenticatedAppSession();
 
     const payload = (await request.json()) as FinalizeSalePayload;
     const saleId = payload.saleId?.trim();
@@ -55,6 +41,7 @@ export async function POST(request: Request) {
     const discount = Number(payload.discount ?? 0);
     const paymentMethod = payload.paymentMethod?.trim() || 'dinheiro';
     const observations = payload.observations?.trim() || '';
+    const relatedQuoteId = payload.relatedQuoteId?.trim() || undefined;
     const installmentsEnabled = Boolean(payload.installments?.enabled);
     const installmentsCount = Number(payload.installments?.count ?? 0);
     const firstDueDate = payload.installments?.firstDueDate;
@@ -63,13 +50,7 @@ export async function POST(request: Request) {
       return NextResponse.json({ error: 'Payload invalido para finalizar venda.' }, { status: 400 });
     }
 
-    const sanitizedItems = items
-      .filter((item) => item && typeof item.name === 'string' && Number(item.quantity) > 0)
-      .map((item) => ({
-        ...item,
-        quantity: Number(item.quantity),
-        price: Number(item.price ?? 0),
-      }));
+    const sanitizedItems = sanitizeSaleItems(items);
 
     if (sanitizedItems.length === 0) {
       return NextResponse.json({ error: 'A venda precisa ter ao menos um item valido.' }, { status: 400 });
@@ -82,6 +63,46 @@ export async function POST(request: Request) {
     if (installmentsEnabled && (!Number.isInteger(installmentsCount) || installmentsCount < 2)) {
       return NextResponse.json({ error: 'Quantidade de parcelas invalida.' }, { status: 400 });
     }
+
+    if (appSession.authSource === 'supabase-only') {
+      const saasContext = await requireSaasPermission(
+        'accessSales',
+        'Modulo de vendas SaaS indisponivel para a sessao atual.',
+        'Voce nao tem permissao para finalizar vendas.'
+      );
+      if (saasContext instanceof NextResponse) return saasContext;
+
+      const result = await finalizeSaasSale({
+        accessToken: saasContext.accessToken,
+        companyId: saasContext.companyId,
+        authUserId: saasContext.userId,
+        saleId,
+        items: sanitizedItems,
+        discount,
+        paymentMethod,
+        observations,
+        customerId: payload.customerId,
+        customerName: payload.customerName,
+        relatedQuoteId,
+        userName:
+          payload.userName?.trim() ||
+          appSession.supabaseUser?.loginName ||
+          appSession.supabaseUser?.email ||
+          'Nao identificado',
+        installments: installmentsEnabled
+          ? {
+              enabled: true,
+              count: installmentsCount,
+              firstDueDate,
+            }
+          : undefined,
+      });
+
+      return NextResponse.json(result);
+    }
+
+    const authResult = await requirePermission('accessSales', 'Voce nao tem permissao para finalizar vendas.');
+    if (authResult instanceof NextResponse) return authResult;
 
     const result = await withTransaction(async (client) => {
       const [sales, stock, financialTransactions, customers] = await Promise.all([
@@ -103,91 +124,34 @@ export async function POST(request: Request) {
       }
 
       const customer = payload.customerId ? customers.find((entry) => entry.id === payload.customerId) : undefined;
-      const subtotal = sanitizedItems.reduce((total, item) => total + item.price * item.quantity, 0);
-      const total = subtotal - discount;
       const now = new Date();
-      const saleDate = toIsoDate(now);
-      const paymentMethodLabel = getPosPaymentMethodLabel(paymentMethod);
-      const productNames = sanitizedItems.map((item) => item.name).join(', ');
       const customerName = customer?.name || payload.customerName;
-
-      const sale: Sale = {
-        id: saleId,
-        date: saleDate,
-        time: now.toLocaleTimeString('pt-BR'),
-        user: payload.userName?.trim() || authResult.name || 'Nao identificado',
+      const sale = buildSaleRecord({
+        saleId,
         items: sanitizedItems,
-        subtotal,
         discount,
-        total,
-        paymentMethod: paymentMethodLabel,
+        paymentMethod,
         observations,
         customerId: customer?.id || payload.customerId,
         customerName,
-      };
-
-      const updatedStock = [...stock];
-      sanitizedItems.forEach((saleItem) => {
-        if (saleItem.id && saleItem.id.startsWith('PROD-')) {
-          const stockIndex = updatedStock.findIndex((stockItem) => stockItem.id === saleItem.id);
-          if (stockIndex !== -1) {
-            updatedStock[stockIndex] = {
-              ...updatedStock[stockIndex],
-              quantity: (updatedStock[stockIndex].quantity || 0) - saleItem.quantity,
-            };
-          }
-        }
+        relatedQuoteId,
+        userName: payload.userName?.trim() || authResult.name,
+        now,
       });
 
-      let newTransactions: FinancialTransaction[] = [];
-      if (installmentsEnabled) {
-        const installmentAmount = total / installmentsCount;
-        const baseDate = firstDueDate ? new Date(`${firstDueDate}T00:00:00`) : addMonths(now, 1);
-
-        for (let index = 0; index < installmentsCount; index += 1) {
-          const dueDate = addMonths(baseDate, index);
-          newTransactions.push({
-            id: `FIN-${saleId}-${index + 1}`,
-            type: 'receita',
-            description: `${buildSaleDescription({
-              customerName,
-              productNames,
-              paymentMethodLabel,
-              total,
-              saleDate: format(now, 'dd/MM/yyyy'),
-            })} | Parcelamento: ${index + 1}/${installmentsCount} de R$ ${installmentAmount.toFixed(2)} | Vencimento: ${format(dueDate, 'dd/MM/yyyy')}`,
-            amount: installmentAmount,
-            date: saleDate,
-            dueDate: toIsoDate(dueDate),
-            category: 'Venda de Produto',
-            paymentMethod: paymentMethodLabel,
-            relatedSaleId: sale.id,
-            status: 'pendente',
-            origin: 'sale',
-          });
-        }
-      } else {
-        newTransactions = [
-          {
-            id: `FIN-${saleId}`,
-            type: 'receita',
-            description: buildSaleDescription({
-              customerName,
-              productNames,
-              paymentMethodLabel,
-              total,
-              saleDate: format(now, 'dd/MM/yyyy'),
-            }),
-            amount: total,
-            date: saleDate,
-            category: 'Venda de Produto',
-            paymentMethod: paymentMethodLabel,
-            relatedSaleId: sale.id,
-            status: paymentMethod === 'boleto' ? 'pendente' : 'pago',
-            origin: 'sale',
-          },
-        ];
-      }
+      const updatedStock = applySaleToStock(stock, sanitizedItems);
+      const newTransactions = buildSaleFinancialTransactions({
+        sale,
+        paymentMethod,
+        installments: installmentsEnabled
+          ? {
+              enabled: true,
+              count: installmentsCount,
+              firstDueDate,
+            }
+          : undefined,
+        now,
+      });
 
       await upsertCollectionRecordWithClient(client, 'sales', sale);
 

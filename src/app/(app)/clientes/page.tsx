@@ -1,25 +1,26 @@
 'use client';
 
 import * as React from 'react';
-import { PlusCircle, MoreHorizontal, Check, ChevronsUpDown, User, Phone, Mail, MapPin, Users } from 'lucide-react';
+import { Mail, MapPin, MoreHorizontal, Phone, PlusCircle, User, Users } from 'lucide-react';
 import { useRouter } from 'next/navigation';
-
-import { Button } from '@/components/ui/button';
+import { EditCustomerDialog } from '@/components/customers/edit-customer-dialog';
+import { CustomerAutocomplete } from '@/components/customers/customer-autocomplete';
+import { CustomerFormFields } from '@/components/customers/customer-form-fields';
+import { CustomerFilesPanel } from '@/components/customers/customer-files-panel';
+import { ServiceHistory } from '@/components/customers/service-history';
+import { useCurrentAppSession } from '@/hooks/use-current-app-session';
+import { useToast } from '@/hooks/use-toast';
+import type { Customer, ServiceOrder } from '@/types';
 import {
-  Card,
-  CardContent,
-  CardDescription,
-  CardHeader,
-  CardTitle,
-  CardFooter,
-} from '@/components/ui/card';
-import {
-  DropdownMenu,
-  DropdownMenuContent,
-  DropdownMenuItem,
-  DropdownMenuLabel,
-  DropdownMenuTrigger,
-} from '@/components/ui/dropdown-menu';
+  createTenantCustomer,
+  deleteTenantCustomer,
+  getCustomers,
+  getServiceOrders,
+  listTenantCustomers,
+  saveCustomers,
+  searchTenantCustomers,
+  updateTenantCustomer,
+} from '@/lib/storage';
 import {
   AlertDialog,
   AlertDialogAction,
@@ -31,31 +32,32 @@ import {
   AlertDialogTitle,
   AlertDialogTrigger,
 } from '@/components/ui/alert-dialog';
+import { Button } from '@/components/ui/button';
+import {
+  Card,
+  CardContent,
+  CardDescription,
+  CardFooter,
+  CardHeader,
+  CardTitle,
+} from '@/components/ui/card';
 import {
   Dialog,
   DialogContent,
   DialogDescription,
+  DialogFooter,
   DialogHeader,
   DialogTitle,
   DialogTrigger,
-  DialogFooter,
 } from '@/components/ui/dialog';
-import { Popover, PopoverContent, PopoverTrigger } from '@/components/ui/popover';
 import {
-  Command,
-  CommandEmpty,
-  CommandGroup,
-  CommandInput,
-  CommandItem,
-  CommandList,
-} from '@/components/ui/command';
-import { getCustomers, getServiceOrders, saveCustomers } from '@/lib/storage';
-import type { Customer, ServiceOrder } from '@/types';
-import { cn } from '@/lib/utils';
-import { useToast } from '@/hooks/use-toast';
-import { EditCustomerDialog } from '@/components/customers/edit-customer-dialog';
-import { ServiceHistory } from '@/components/customers/service-history';
-import { CustomerFormFields } from '@/components/customers/customer-form-fields';
+  DropdownMenu,
+  DropdownMenuContent,
+  DropdownMenuItem,
+  DropdownMenuLabel,
+  DropdownMenuTrigger,
+} from '@/components/ui/dropdown-menu';
+import { ModuleLoadingState, ModuleState } from '@/components/ui/module-state';
 
 const initialNewCustomerState: Omit<Customer, 'id'> = {
   name: '',
@@ -66,39 +68,80 @@ const initialNewCustomerState: Omit<Customer, 'id'> = {
   cep: '',
 };
 
+const sortCustomersByName = (items: Customer[]) =>
+  [...items].sort((a, b) => a.name.localeCompare(b.name));
+
 export default function CustomersPage() {
   const router = useRouter();
   const { toast } = useToast();
+  const session = useCurrentAppSession();
+
   const [customers, setCustomers] = React.useState<Customer[]>([]);
   const [serviceOrders, setServiceOrders] = React.useState<ServiceOrder[]>([]);
   const [selectedCustomer, setSelectedCustomer] = React.useState<Customer | null>(null);
   const [customerServiceHistory, setCustomerServiceHistory] = React.useState<ServiceOrder[]>([]);
-  const [openCombobox, setOpenCombobox] = React.useState(false);
   const [isEditDialogOpen, setIsEditDialogOpen] = React.useState(false);
   const [isLoading, setIsLoading] = React.useState(true);
   const [isAddCustomerDialogOpen, setIsAddCustomerDialogOpen] = React.useState(false);
   const [newCustomer, setNewCustomer] = React.useState(initialNewCustomerState);
+  const [loadError, setLoadError] = React.useState<string | null>(null);
+
+  const useSaasCustomers =
+    session.authSource === 'supabase-only' && session.tenantAccess?.canAccessTenant === true;
+
+  const loadData = React.useCallback(async () => {
+    try {
+      setIsLoading(true);
+      setLoadError(null);
+
+      if (useSaasCustomers) {
+        const customersData = await listTenantCustomers();
+        setCustomers(sortCustomersByName(customersData));
+        setServiceOrders([]);
+        return;
+      }
+
+      const [customersData, serviceOrdersData] = await Promise.all([getCustomers(), getServiceOrders()]);
+      setCustomers(sortCustomersByName(customersData));
+      setServiceOrders(serviceOrdersData);
+    } catch (error) {
+      const message = error instanceof Error ? error.message : 'Nao foi possivel carregar os clientes.';
+      setLoadError(message);
+      toast({
+        variant: 'destructive',
+        title: 'Erro ao carregar clientes',
+        description: message,
+      });
+    } finally {
+      setIsLoading(false);
+    }
+  }, [toast, useSaasCustomers]);
 
   React.useEffect(() => {
-    const loadData = async () => {
-      setIsLoading(true);
-      const [customersData, serviceOrdersData] = await Promise.all([
-        getCustomers(),
-        getServiceOrders(),
-      ]);
-      customersData.sort((a, b) => a.name.localeCompare(b.name));
-      setCustomers(customersData);
-      setServiceOrders(serviceOrdersData);
-      setIsLoading(false);
-    };
-    loadData();
-  }, []);
+    if (session.isLoading) {
+      return;
+    }
+
+    void loadData();
+  }, [loadData, session.isLoading]);
 
   React.useEffect(() => {
     const handleKeyDown = (event: KeyboardEvent) => {
-      if (event.key && event.key.toLowerCase() === 'n' && !event.ctrlKey && !event.altKey && !event.shiftKey && !event.metaKey) {
+      if (
+        event.key &&
+        event.key.toLowerCase() === 'n' &&
+        !event.ctrlKey &&
+        !event.altKey &&
+        !event.shiftKey &&
+        !event.metaKey
+      ) {
         const target = event.target as HTMLElement;
-        if (target.tagName !== 'INPUT' && target.tagName !== 'TEXTAREA' && target.tagName !== 'SELECT' && !target.isContentEditable) {
+        if (
+          target.tagName !== 'INPUT' &&
+          target.tagName !== 'TEXTAREA' &&
+          target.tagName !== 'SELECT' &&
+          !target.isContentEditable
+        ) {
           event.preventDefault();
           setIsAddCustomerDialogOpen(true);
         }
@@ -117,36 +160,54 @@ export default function CustomersPage() {
     }
   }, [isAddCustomerDialogOpen]);
 
-  const handleSelectCustomer = (customer: Customer | null) => {
-    setSelectedCustomer(customer);
-    if (customer) {
-      const history = serviceOrders.filter(
-        (order: any) => {
+  const handleSelectCustomer = React.useCallback(
+    (customer: Customer | null) => {
+      setSelectedCustomer(customer);
+
+      if (!customer || useSaasCustomers) {
+        setCustomerServiceHistory([]);
+        return;
+      }
+
+      const history = serviceOrders
+        .filter((order: any) => {
           if (order.customerId) {
             return order.customerId === customer.id;
           }
+
           const orderCustomerName = order.customerName || order.client?.name;
           return orderCustomerName && orderCustomerName.toLowerCase() === customer.name.toLowerCase();
-        }
-      ).sort((a, b) => {
-        const dateA = new Date(a.date || (a as any).entryDate).getTime();
-        const dateB = new Date(b.date || (b as any).entryDate).getTime();
-        return dateB - dateA;
-      });
+        })
+        .sort((a, b) => {
+          const dateA = new Date(a.date || (a as any).entryDate).getTime();
+          const dateB = new Date(b.date || (b as any).entryDate).getTime();
+          return dateB - dateA;
+        });
+
       setCustomerServiceHistory(history);
-    } else {
-      setCustomerServiceHistory([]);
-    }
-  };
+    },
+    [serviceOrders, useSaasCustomers]
+  );
 
   const handleUpdateCustomer = async (updatedCustomer: Customer) => {
-    const updatedCustomers = customers.map((customer) => (
-      customer.id === updatedCustomer.id ? updatedCustomer : customer
-    ));
-    updatedCustomers.sort((a, b) => a.name.localeCompare(b.name));
-    await saveCustomers(updatedCustomers);
-    setCustomers(updatedCustomers);
-    setSelectedCustomer(updatedCustomer);
+    if (useSaasCustomers) {
+      const savedCustomer = await updateTenantCustomer(updatedCustomer);
+      const updatedCustomers = sortCustomersByName(
+        customers.map((customer) => (customer.id === savedCustomer.id ? savedCustomer : customer))
+      );
+
+      setCustomers(updatedCustomers);
+      setSelectedCustomer(savedCustomer);
+    } else {
+      const updatedCustomers = sortCustomersByName(
+        customers.map((customer) => (customer.id === updatedCustomer.id ? updatedCustomer : customer))
+      );
+
+      await saveCustomers(updatedCustomers);
+      setCustomers(updatedCustomers);
+      setSelectedCustomer(updatedCustomer);
+    }
+
     toast({
       title: 'Cliente atualizado!',
       description: `Os dados de ${updatedCustomer.name} foram salvos.`,
@@ -155,9 +216,14 @@ export default function CustomersPage() {
   };
 
   const handleDeleteCustomer = async (customerId: string) => {
-    const updatedCustomers = customers.filter((customer) => customer.id !== customerId);
-    await saveCustomers(updatedCustomers);
-    setCustomers(updatedCustomers);
+    if (useSaasCustomers) {
+      await deleteTenantCustomer(customerId);
+    } else {
+      const updatedCustomers = customers.filter((customer) => customer.id !== customerId);
+      await saveCustomers(updatedCustomers);
+    }
+
+    setCustomers((current) => current.filter((customer) => customer.id !== customerId));
     setSelectedCustomer(null);
     setCustomerServiceHistory([]);
     toast({
@@ -168,12 +234,12 @@ export default function CustomersPage() {
   };
 
   const handleOpenServiceOrder = () => {
-    if (selectedCustomer) {
+    if (selectedCustomer && !useSaasCustomers) {
       router.push(`/ordens-de-servico?customerId=${selectedCustomer.id}`);
     }
   };
 
-  const handleSaveCustomer = async (generateOsAfterSave = false) => {
+  const handleSaveCustomer = async () => {
     if (!newCustomer.name) {
       toast({
         variant: 'destructive',
@@ -183,30 +249,53 @@ export default function CustomersPage() {
       return;
     }
 
-    const customerToAdd: Customer = {
-      ...newCustomer,
-      id: `CUST-${Date.now()}`,
-    };
+    if (useSaasCustomers) {
+      const customerToAdd = await createTenantCustomer(newCustomer);
+      const updatedCustomers = sortCustomersByName([...customers, customerToAdd]);
+      setCustomers(updatedCustomers);
 
-    const updatedCustomers = [...customers, customerToAdd];
-    updatedCustomers.sort((a, b) => a.name.localeCompare(b.name));
-    await saveCustomers(updatedCustomers);
-    setCustomers(updatedCustomers);
+      toast({
+        title: 'Cliente salvo!',
+        description: `${customerToAdd.name} foi adicionado com sucesso no modulo SaaS.`,
+      });
+    } else {
+      const customerToAdd: Customer = {
+        ...newCustomer,
+        id: `CUST-${Date.now()}`,
+      };
 
-    toast({
-      title: 'Cliente salvo!',
-      description: `${customerToAdd.name} foi adicionado com sucesso.`,
-    });
+      const updatedCustomers = sortCustomersByName([...customers, customerToAdd]);
+      await saveCustomers(updatedCustomers);
+      setCustomers(updatedCustomers);
+
+      toast({
+        title: 'Cliente salvo!',
+        description: `${customerToAdd.name} foi adicionado com sucesso.`,
+      });
+    }
 
     setIsAddCustomerDialogOpen(false);
-
-    if (generateOsAfterSave) {
-      router.push(`/ordens-de-servico?customerId=${customerToAdd.id}`);
-    }
   };
 
-  if (isLoading) {
-    return <div>Carregando clientes...</div>;
+  if (session.isLoading || isLoading) {
+    return (
+      <ModuleLoadingState
+        title="Carregando clientes"
+        description="Sincronizando cadastro e dados do contexto atual."
+      />
+    );
+  }
+
+  if (loadError) {
+    return (
+      <ModuleState
+        title="Nao foi possivel carregar clientes"
+        description={loadError}
+        tone="destructive"
+        actionLabel="Tentar novamente"
+        onAction={() => void loadData()}
+      />
+    );
   }
 
   return (
@@ -217,7 +306,9 @@ export default function CustomersPage() {
             <div>
               <CardTitle>Clientes</CardTitle>
               <CardDescription>
-                Gerencie seus clientes e consulte o historico de atendimentos.
+                {useSaasCustomers
+                  ? 'Modulo de clientes rodando sobre o tenant SaaS atual.'
+                  : 'Gerencie seus clientes e consulte o historico de atendimentos.'}
               </CardDescription>
             </div>
             <Dialog open={isAddCustomerDialogOpen} onOpenChange={setIsAddCustomerDialogOpen}>
@@ -239,9 +330,10 @@ export default function CustomersPage() {
                 </DialogHeader>
                 <CustomerFormFields value={newCustomer} onChange={setNewCustomer} />
                 <DialogFooter className="justify-end gap-2">
-                  <Button variant="ghost" onClick={() => setIsAddCustomerDialogOpen(false)}>Cancelar</Button>
-                  <Button variant="outline" onClick={() => handleSaveCustomer(false)}>Salvar</Button>
-                  <Button onClick={() => handleSaveCustomer(true)}>Salvar e Gerar OS</Button>
+                  <Button variant="ghost" onClick={() => setIsAddCustomerDialogOpen(false)}>
+                    Cancelar
+                  </Button>
+                  <Button onClick={handleSaveCustomer}>Salvar</Button>
                 </DialogFooter>
               </DialogContent>
             </Dialog>
@@ -249,48 +341,22 @@ export default function CustomersPage() {
         </CardHeader>
         <CardContent>
           <div className="mb-4">
-            <Popover open={openCombobox} onOpenChange={setOpenCombobox}>
-              <PopoverTrigger asChild>
-                <Button
-                  variant="outline"
-                  role="combobox"
-                  aria-expanded={openCombobox}
-                  className="w-full justify-between md:w-[400px]"
-                >
-                  {selectedCustomer ? selectedCustomer.name : 'Selecione ou pesquise um cliente...'}
-                  <ChevronsUpDown className="ml-2 h-4 w-4 shrink-0 opacity-50" />
-                </Button>
-              </PopoverTrigger>
-              <PopoverContent className="w-[--radix-popover-trigger-width] p-0">
-                <Command>
-                  <CommandInput placeholder="Procurar cliente..." />
-                  <CommandList>
-                    <CommandEmpty>Nenhum cliente encontrado.</CommandEmpty>
-                    <CommandGroup>
-                      {customers.map((customer) => (
-                        <CommandItem
-                          key={customer.id}
-                          value={customer.name}
-                          onSelect={(currentValue) => {
-                            const selected = customers.find((item) => item.name.toLowerCase() === currentValue.toLowerCase());
-                            handleSelectCustomer(selected || null);
-                            setOpenCombobox(false);
-                          }}
-                        >
-                          <Check
-                            className={cn(
-                              'mr-2 h-4 w-4',
-                              selectedCustomer?.name.toLowerCase() === customer.name.toLowerCase() ? 'opacity-100' : 'opacity-0'
-                            )}
-                          />
-                          {customer.name}
-                        </CommandItem>
-                      ))}
-                    </CommandGroup>
-                  </CommandList>
-                </Command>
-              </PopoverContent>
-            </Popover>
+            <CustomerAutocomplete
+              selectedCustomer={selectedCustomer}
+              onSelect={(customer) => {
+                if (!customer) {
+                  handleSelectCustomer(null);
+                  return;
+                }
+
+                const fullCustomer = customers.find((item) => item.id === customer.id) ?? null;
+                handleSelectCustomer(fullCustomer);
+              }}
+              searchFunction={useSaasCustomers ? searchTenantCustomers : undefined}
+              placeholder="Digite para buscar clientes em tempo real..."
+              emptyMessage="Nenhum cliente encontrado."
+              className="w-full md:w-[400px]"
+            />
           </div>
         </CardContent>
       </Card>
@@ -301,7 +367,7 @@ export default function CustomersPage() {
             <Card>
               <CardHeader className="flex flex-row items-center justify-between">
                 <CardTitle>Dados do Cliente</CardTitle>
-                <DropdownMenu>
+                <DropdownMenu modal={false}>
                   <DropdownMenuTrigger asChild>
                     <Button aria-haspopup="true" size="icon" variant="ghost">
                       <MoreHorizontal className="h-4 w-4" />
@@ -313,12 +379,17 @@ export default function CustomersPage() {
                     <DropdownMenuItem onSelect={() => setIsEditDialogOpen(true)}>
                       Editar Cliente
                     </DropdownMenuItem>
-                    <DropdownMenuItem onSelect={handleOpenServiceOrder}>
-                      Abrir Nova Ordem de Servico
-                    </DropdownMenuItem>
+                    {!useSaasCustomers ? (
+                      <DropdownMenuItem onSelect={handleOpenServiceOrder}>
+                        Abrir Nova Ordem de Servico
+                      </DropdownMenuItem>
+                    ) : null}
                     <AlertDialog>
                       <AlertDialogTrigger asChild>
-                        <DropdownMenuItem onSelect={(e) => e.preventDefault()} className="text-destructive">
+                        <DropdownMenuItem
+                          onSelect={(event) => event.preventDefault()}
+                          className="text-destructive"
+                        >
                           Excluir Cliente
                         </DropdownMenuItem>
                       </AlertDialogTrigger>
@@ -326,7 +397,7 @@ export default function CustomersPage() {
                         <AlertDialogHeader>
                           <AlertDialogTitle>Voce tem certeza?</AlertDialogTitle>
                           <AlertDialogDescription>
-                            Essa acao nao pode ser desfeita. Isso excluira permanentemente o cliente e todo seu historico de atendimentos.
+                            Essa acao nao pode ser desfeita.
                           </AlertDialogDescription>
                         </AlertDialogHeader>
                         <AlertDialogFooter>
@@ -358,9 +429,7 @@ export default function CustomersPage() {
                   <span className="flex-1">{selectedCustomer.address || 'Nao informado'}</span>
                 </div>
                 {selectedCustomer.cep ? (
-                  <div className="text-sm text-muted-foreground">
-                    CEP: {selectedCustomer.cep}
-                  </div>
+                  <div className="text-sm text-muted-foreground">CEP: {selectedCustomer.cep}</div>
                 ) : null}
                 {selectedCustomer.document ? (
                   <div className="text-sm text-muted-foreground">
@@ -369,12 +438,45 @@ export default function CustomersPage() {
                 ) : null}
               </CardContent>
               <CardFooter className="text-sm text-muted-foreground">
-                Ultimo atendimento em: {customerServiceHistory.length > 0 ? new Date(customerServiceHistory[0].date || (customerServiceHistory[0] as any).entryDate).toLocaleDateString('pt-BR') : 'Nenhum'}
+                {useSaasCustomers
+                  ? 'Historico de OS SaaS sera integrado na proxima etapa.'
+                  : `Ultimo atendimento em: ${
+                      customerServiceHistory.length > 0
+                        ? new Date(
+                            customerServiceHistory[0].date || (customerServiceHistory[0] as any).entryDate
+                          ).toLocaleDateString('pt-BR')
+                        : 'Nenhum'
+                    }`}
               </CardFooter>
             </Card>
           </div>
           <div className="lg:col-span-2">
-            <ServiceHistory history={customerServiceHistory} />
+            {useSaasCustomers ? (
+              <div className="space-y-6">
+                <Card>
+                  <CardHeader>
+                    <CardTitle>Historico de Atendimentos</CardTitle>
+                    <CardDescription>
+                      O CRUD de clientes ja esta no runtime SaaS. O historico de OS permanece no legado
+                      ate a migracao do modulo correspondente.
+                    </CardDescription>
+                  </CardHeader>
+                </Card>
+                <Card>
+                  <CardHeader>
+                    <CardTitle>Documentos do Cliente</CardTitle>
+                    <CardDescription>
+                      Arquivos privados armazenados no bucket `customer-files` do tenant atual.
+                    </CardDescription>
+                  </CardHeader>
+                  <CardContent>
+                    <CustomerFilesPanel customerId={selectedCustomer.id} enabled />
+                  </CardContent>
+                </Card>
+              </div>
+            ) : (
+              <ServiceHistory history={customerServiceHistory} />
+            )}
           </div>
         </div>
       ) : (
@@ -382,19 +484,22 @@ export default function CustomersPage() {
           <CardContent>
             <Users className="h-16 w-16 text-muted-foreground" />
             <h3 className="mt-4 text-xl font-semibold">Nenhum cliente selecionado</h3>
-            <p className="text-muted-foreground">Selecione um cliente acima para ver seus dados e historico.</p>
+            <p className="text-muted-foreground">
+              Selecione um cliente acima para ver seus dados
+              {useSaasCustomers ? ' no tenant atual.' : ' e historico.'}
+            </p>
           </CardContent>
         </Card>
       )}
 
-      {selectedCustomer && (
+      {selectedCustomer ? (
         <EditCustomerDialog
           customer={selectedCustomer}
           isOpen={isEditDialogOpen}
           onOpenChange={setIsEditDialogOpen}
           onSave={handleUpdateCustomer}
         />
-      )}
+      ) : null}
     </div>
   );
 }

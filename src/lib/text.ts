@@ -1,4 +1,4 @@
-const MOJIBAKE_PATTERN = /(?:Ã.|Â.|â.|�)/;
+const MOJIBAKE_PATTERN = /(?:\u00C3.|\u00C2.|\u00E2.|\uFFFD)/;
 
 const repairMojibake = (value: string): string => {
   if (!value || !MOJIBAKE_PATTERN.test(value)) {
@@ -38,3 +38,12 @@ export const normalizeOptionalText = (value: string | null | undefined): string 
 
   return normalizeText(value);
 };
+
+export const slugify = (value: string): string =>
+  normalizeOptionalText(value)
+    .normalize('NFD')
+    .replace(/[\u0300-\u036f]/g, '')
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, '-')
+    .replace(/^-+|-+$/g, '')
+    .replace(/-{2,}/g, '-');

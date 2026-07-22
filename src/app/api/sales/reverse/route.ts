@@ -2,6 +2,9 @@ import { NextResponse } from 'next/server';
 import type { FinancialTransaction, Sale, StockItem } from '@/types';
 import { requirePermission } from '@/lib/server/authz';
 import { listCollectionWithClient, upsertCollectionRecordWithClient, withTransaction } from '@/lib/server/postgres';
+import { requireSaasPermission } from '@/lib/server/saas-authz';
+import { reverseSaasSale } from '@/lib/server/saas-sales';
+import { getAuthenticatedAppSession } from '@/lib/server/session';
 
 type ReverseSalePayload = {
   saleId?: string;
@@ -17,8 +20,7 @@ type ReverseSaleResult = {
 
 export async function POST(request: Request) {
   try {
-    const authResult = await requirePermission('accessFinancials', 'Voce nao tem permissao para estornar vendas.');
-    if (authResult instanceof NextResponse) return authResult;
+    const appSession = await getAuthenticatedAppSession();
 
     const payload = (await request.json()) as ReverseSalePayload;
     const saleId = payload.saleId?.trim();
@@ -27,6 +29,28 @@ export async function POST(request: Request) {
     if (!saleId || !reason) {
       return NextResponse.json({ error: 'Payload invalido para estorno.' }, { status: 400 });
     }
+
+    if (appSession.authSource === 'supabase-only') {
+      const saasContext = await requireSaasPermission(
+        'accessFinancials',
+        'Modulo de vendas SaaS indisponivel para a sessao atual.',
+        'Voce nao tem permissao para estornar vendas.'
+      );
+      if (saasContext instanceof NextResponse) return saasContext;
+
+      const result = await reverseSaasSale({
+        accessToken: saasContext.accessToken,
+        companyId: saasContext.companyId,
+        authUserId: saasContext.userId,
+        saleId,
+        reason,
+      });
+
+      return NextResponse.json(result);
+    }
+
+    const authResult = await requirePermission('accessFinancials', 'Voce nao tem permissao para estornar vendas.');
+    if (authResult instanceof NextResponse) return authResult;
 
     const result = await withTransaction(async (client) => {
       const [sales, stock, financialTransactions] = await Promise.all([

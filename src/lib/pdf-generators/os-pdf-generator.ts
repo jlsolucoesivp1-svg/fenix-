@@ -1,6 +1,8 @@
 import type { ServiceOrder, Customer, CompanyInfo } from '@/types';
-import { getCompanyInfo, getSettings } from '@/lib/storage';
+import { getEffectiveCompanyInfo, getEffectiveSettings } from '@/lib/storage';
 import { normalizeOptionalText, normalizeText } from '@/lib/text';
+import { formatServiceOrderNumber } from '@/lib/service-order-id';
+import { buildPixTxid, createPixPaymentData, extractCityFromAddress } from '@/lib/pix';
 import { jsPDF } from 'jspdf';
 import 'jspdf-autotable';
 
@@ -10,6 +12,33 @@ declare module 'jspdf' {
     lastAutoTable: { finalY: number };
   }
 }
+
+export type OsPdfDocumentType = 'service-order' | 'quote' | 'delivery-receipt' | 'invoice';
+
+const osDocumentConfig: Record<
+  OsPdfDocumentType,
+  {
+    label: string;
+    title: string;
+  }
+> = {
+  'service-order': {
+    label: 'ordem de serviço',
+    title: 'Ordem de Serviço',
+  },
+  quote: {
+    label: 'orçamento',
+    title: 'Orçamento de Serviço',
+  },
+  'delivery-receipt': {
+    label: 'recibo de entrega',
+    title: 'Recibo de Entrega',
+  },
+  invoice: {
+    label: 'fatura',
+    title: 'Fatura de Serviço',
+  },
+};
 
 const formatDate = (dateString: string | undefined) => {
   if (!dateString || isNaN(new Date(dateString).getTime())) {
@@ -91,7 +120,7 @@ const drawHeader = async (doc: jsPDF, companyInfo: CompanyInfo, title: string, o
   doc.text(title, rightHeaderX, currentY - 8, { align: 'right' });
   doc.setFontSize(10);
   doc.setFont('helvetica', 'normal');
-  doc.text(`OS Nº: #${orderId.slice(-4)}`, rightHeaderX, currentY - 2, { align: 'right' });
+  doc.text(`OS Nº: #${formatServiceOrderNumber(orderId)}`, rightHeaderX, currentY - 2, { align: 'right' });
   doc.text(`Data: ${date}`, rightHeaderX, currentY + 4, { align: 'right' });
 
   return 55;
@@ -150,15 +179,67 @@ const drawFullWidthBox = (doc: jsPDF, title: string, content: string, y: number)
   return y + textHeight + 20;
 };
 
-export const generateOsPdf = async (
-  documentType: 'entry' | 'quote' | 'delivery' | 'invoice',
-  order: ServiceOrder,
-  customer: Customer
-) => {
-  const companyInfo = normalizeText(await getCompanyInfo());
-  const settings = await getSettings();
+const drawItemsTable = (doc: jsPDF, order: ServiceOrder, startY: number, footerLabel: string) => {
+  if (!order.items || order.items.length === 0) {
+    return startY;
+  }
+
+  (doc as any).autoTable({
+    startY,
+    head: [['Tipo', 'Descrição', 'Qtd', 'Vlr. Unit.', 'Total']],
+    body: order.items.map((item) => [
+      item.type === 'part' ? 'Peça' : 'Serviço',
+      item.description,
+      item.quantity,
+      `R$ ${item.unitPrice.toFixed(2)}`,
+      `R$ ${(item.unitPrice * item.quantity).toFixed(2)}`,
+    ]),
+    theme: 'striped',
+    headStyles: { fillColor: '#334155', textColor: '#FFFFFF', fontStyle: 'bold', fontSize: 9, cellPadding: 1.5 },
+    bodyStyles: { fontSize: 8, cellPadding: 1.5 },
+    footStyles: { fillColor: '#F1F5F9', textColor: '#000000', fontStyle: 'bold' },
+    foot: [[footerLabel, '', '', '', `R$ ${((order.finalValue ?? order.totalValue) || 0).toFixed(2)}`]],
+  });
+
+  return (doc as any).lastAutoTable.finalY + 10;
+};
+
+const ensureVerticalSpace = (doc: jsPDF, currentY: number, requiredHeight: number) => {
+  const pageHeight = doc.internal.pageSize.getHeight();
+  if (currentY + requiredHeight <= pageHeight - 15) {
+    return currentY;
+  }
+
+  doc.addPage();
+  return 20;
+};
+
+export const generateOsPdf = async (documentType: OsPdfDocumentType, order: ServiceOrder, customer: Customer) => {
+  const config = osDocumentConfig[documentType];
+  if (!config) {
+    throw new Error(`Tipo de documento de impressão inválido: ${documentType}`);
+  }
+
+  const companyInfo = normalizeText(await getEffectiveCompanyInfo());
+  const settings = await getEffectiveSettings();
   const normalizedOrder = normalizeText(order);
   const normalizedCustomer = normalizeText(customer);
+
+  if (!normalizedOrder.id) {
+    throw new Error(`Não foi possível gerar ${config.label}: OS sem identificador.`);
+  }
+
+  if (!normalizedCustomer.name) {
+    throw new Error(`Não foi possível gerar ${config.label}: cliente inválido.`);
+  }
+
+  console.info('[print] Gerando documento da OS', {
+    documentType,
+    label: config.label,
+    orderId: normalizedOrder.id,
+    customerId: normalizedOrder.customerId,
+    customerName: normalizedCustomer.name,
+  });
 
   const doc = new jsPDF();
   const equipmentName =
@@ -178,15 +259,22 @@ export const generateOsPdf = async (
     'Acessórios:': normalizedOrder.accessories || 'Nenhum',
   };
 
-  if (documentType === 'entry') {
-    let currentY = await drawHeader(doc, companyInfo, 'Recibo de Entrada', normalizedOrder.id, formatDate(normalizedOrder.date));
+  if (documentType === 'service-order') {
+    let currentY = await drawHeader(doc, companyInfo, config.title, normalizedOrder.id, formatDate(normalizedOrder.date));
     currentY = drawInfoBoxes(doc, clientData, equipmentData, currentY);
     currentY = drawFullWidthBox(doc, 'Defeito Relatado pelo Cliente', normalizedOrder.reportedProblem || 'Não informado.', currentY);
+    currentY = drawFullWidthBox(
+      doc,
+      'Diagnóstico / Observações Técnicas',
+      normalizedOrder.technicalReport || 'Aguardando diagnóstico técnico.',
+      currentY
+    );
+    currentY = drawItemsTable(doc, normalizedOrder, currentY, 'Total Previsto');
     currentY += 10;
     doc.setFontSize(8);
 
     const termsText =
-      'Declaro que o equipamento acima foi entregue para análise e orçamento. O prazo para orçamento é de 3 dias úteis. A apresentação deste recibo é obrigatória para a retirada do equipamento.';
+      'Declaro que o equipamento acima foi recebido para execução da ordem de serviço descrita neste documento. Esta via identifica formalmente o atendimento e deve ser apresentada para acompanhamento ou retirada do equipamento.';
     const textLines = doc.splitTextToSize(termsText, doc.internal.pageSize.getWidth() - 30);
     doc.text(textLines, 15, currentY);
     currentY += textLines.length * 4 + 20;
@@ -198,7 +286,7 @@ export const generateOsPdf = async (
   }
 
   if (documentType === 'quote') {
-    let currentY = await drawHeader(doc, companyInfo, 'Orçamento de Serviço', normalizedOrder.id, new Date().toLocaleDateString('pt-BR'));
+    let currentY = await drawHeader(doc, companyInfo, config.title, normalizedOrder.id, new Date().toLocaleDateString('pt-BR'));
     currentY = drawInfoBoxes(doc, clientData, { ...equipmentData, Acessórios: undefined } as any, currentY);
     currentY = drawFullWidthBox(doc, 'Defeito Reclamado', normalizedOrder.reportedProblem || 'Não informado.', currentY);
     currentY = drawFullWidthBox(
@@ -207,26 +295,7 @@ export const generateOsPdf = async (
       normalizedOrder.technicalReport || 'Aguardando diagnóstico técnico.',
       currentY
     );
-
-    if (normalizedOrder.items && normalizedOrder.items.length > 0) {
-      (doc as any).autoTable({
-        startY: currentY,
-        head: [['Tipo', 'Descrição', 'Qtd', 'Vlr. Unit.', 'Total']],
-        body: normalizedOrder.items.map((item) => [
-          item.type === 'part' ? 'Peça' : 'Serviço',
-          item.description,
-          item.quantity,
-          `R$ ${item.unitPrice.toFixed(2)}`,
-          `R$ ${(item.unitPrice * item.quantity).toFixed(2)}`,
-        ]),
-        theme: 'striped',
-        headStyles: { fillColor: '#334155', textColor: '#FFFFFF', fontStyle: 'bold', fontSize: 9, cellPadding: 1.5 },
-        bodyStyles: { fontSize: 8, cellPadding: 1.5 },
-        footStyles: { fillColor: '#F1F5F9', textColor: '#000000', fontStyle: 'bold' },
-        foot: [['Total', '', '', '', `R$ ${normalizedOrder.totalValue.toFixed(2)}`]],
-      });
-      currentY = (doc as any).lastAutoTable.finalY + 10;
-    }
+    currentY = drawItemsTable(doc, normalizedOrder, currentY, 'Total');
 
     doc.setFontSize(9);
     doc.setFont('helvetica', 'bold');
@@ -241,8 +310,8 @@ export const generateOsPdf = async (
     );
   }
 
-  if (documentType === 'delivery') {
-    let currentY = await drawHeader(doc, companyInfo, 'Recibo de Entrega', normalizedOrder.id, new Date().toLocaleDateString('pt-BR'));
+  if (documentType === 'delivery-receipt') {
+    let currentY = await drawHeader(doc, companyInfo, config.title, normalizedOrder.id, new Date().toLocaleDateString('pt-BR'));
     currentY = drawInfoBoxes(doc, clientData, { ...equipmentData, Acessórios: undefined } as any, currentY);
     currentY = drawFullWidthBox(
       doc,
@@ -300,7 +369,7 @@ export const generateOsPdf = async (
     const totalPaid = normalizedOrder.payments?.reduce((sum, payment) => sum + payment.amount, 0) || 0;
     const balanceDue = (normalizedOrder.finalValue ?? normalizedOrder.totalValue ?? 0) - totalPaid;
 
-    let currentY = await drawHeader(doc, companyInfo, 'Fatura de Serviço', normalizedOrder.id, new Date().toLocaleDateString('pt-BR'));
+    let currentY = await drawHeader(doc, companyInfo, config.title, normalizedOrder.id, new Date().toLocaleDateString('pt-BR'));
     currentY = drawInfoBoxes(
       doc,
       clientData,
@@ -345,15 +414,58 @@ export const generateOsPdf = async (
 
     currentY = (doc as any).lastAutoTable.finalY;
 
-    if (companyInfo.pixKey) {
-      currentY += 10;
-      doc.setFontSize(9);
-      doc.text('Chave PIX para pagamento:', 15, currentY);
-      doc.setFontSize(10);
-      doc.setFont('helvetica', 'bold');
-      doc.text(normalizeOptionalText(companyInfo.pixKey), 15, currentY + 5);
+    if (balanceDue > 0 && companyInfo.pixKey) {
+      currentY = ensureVerticalSpace(doc, currentY + 8, 110);
+
+      try {
+        const pixPaymentData = createPixPaymentData({
+          pixKey: companyInfo.pixKey,
+          merchantName: companyInfo.name,
+          merchantCity: extractCityFromAddress(companyInfo.address),
+          amount: balanceDue,
+          txid: buildPixTxid(`OS${formatServiceOrderNumber(normalizedOrder.id)}`),
+          description: `OS ${formatServiceOrderNumber(normalizedOrder.id)}`,
+          qrCodeWidth: 180,
+        });
+        const qrCodeDataUrl = await pixPaymentData.qrCodeDataUrlPromise;
+
+        doc.setFillColor(243, 244, 246);
+        doc.rect(15, currentY + 8, doc.internal.pageSize.getWidth() - 30, 7, 'F');
+        doc.setFontSize(10);
+        doc.setFont('helvetica', 'bold');
+        doc.text('Pagamento PIX', 18, currentY + 13);
+        currentY += 17;
+
+        if (qrCodeDataUrl) {
+          doc.addImage(qrCodeDataUrl, 'PNG', 18, currentY, 42, 42);
+        }
+
+        doc.setFont('helvetica', 'bold');
+        doc.setFontSize(9);
+        doc.text('Valor para pagamento:', 68, currentY + 6);
+        doc.setFont('helvetica', 'normal');
+        doc.text(`R$ ${balanceDue.toFixed(2)}`, 68, currentY + 12);
+        doc.text(`TXID: ${buildPixTxid(`OS${formatServiceOrderNumber(normalizedOrder.id)}`)}`, 68, currentY + 18);
+
+        const payloadLines = doc.splitTextToSize(pixPaymentData.payload, doc.internal.pageSize.getWidth() - 88);
+        doc.setFont('helvetica', 'bold');
+        doc.text('PIX copia e cola:', 68, currentY + 26);
+        doc.setFont('helvetica', 'normal');
+        doc.setFontSize(8);
+        doc.text(payloadLines, 68, currentY + 31);
+      } catch (error) {
+        console.error('[print] Falha ao gerar bloco PIX da fatura', {
+          orderId: normalizedOrder.id,
+          error,
+        });
+      }
     }
   }
+
+  console.info('[print] Documento da OS gerado com sucesso', {
+    documentType,
+    orderId: normalizedOrder.id,
+  });
 
   doc.autoPrint();
   doc.output('dataurlnewwindow');

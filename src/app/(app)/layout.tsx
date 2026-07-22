@@ -1,19 +1,15 @@
 import { unstable_noStore as noStore } from 'next/cache';
 import { redirect } from 'next/navigation';
 import { AppShell } from '@/components/layout/app-shell';
-import { getAuthenticatedUser } from '@/lib/server/session';
-import { getSystemActivation } from '@/lib/server/activation';
+import { getAuthenticatedAppSession } from '@/lib/server/session';
 
 export default async function AppLayout({ children }: { children: React.ReactNode }) {
   noStore();
 
-  const user = await getAuthenticatedUser();
-  if (!user) {
-    redirect('/');
-  }
+  const session = await getAuthenticatedAppSession();
+  const canAccessApp = Boolean(session.user) || session.tenantAccess?.canAccessTenant === true;
 
-  const activation = await getSystemActivation();
-  if (activation.status !== 'active') {
+  if (!canAccessApp) {
     redirect('/');
   }
 

@@ -16,7 +16,7 @@ import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@
 import { User, Calendar, Clock, Printer, ShoppingCart, DollarSign, StickyNote } from 'lucide-react';
 import type { Sale } from '@/types';
 import { useToast } from '@/hooks/use-toast';
-import { getCompanyInfo } from '@/lib/storage';
+import { getEffectiveCompanyInfo } from '@/lib/storage';
 import { normalizeOptionalText, normalizeText } from '@/lib/text';
 import jsPDF from 'jspdf';
 import 'jspdf-autotable';
@@ -59,7 +59,7 @@ export function SaleDetailsDialog({ isOpen, onOpenChange, sale }: SaleDetailsDia
       return;
     }
 
-    const companyInfo = normalizeText(await getCompanyInfo());
+    const companyInfo = normalizeText(await getEffectiveCompanyInfo());
     const normalizedSale = normalizeText(sale);
 
     const generateContent = (logoImage: HTMLImageElement | null = null) => {
@@ -170,18 +170,18 @@ export function SaleDetailsDialog({ isOpen, onOpenChange, sale }: SaleDetailsDia
 
   return (
     <Dialog open={isOpen} onOpenChange={onOpenChange}>
-      <DialogContent className="sm:max-w-3xl h-[80vh] flex flex-col">
+      <DialogContent className="flex h-[80dvh] flex-col overflow-hidden sm:max-w-3xl">
         <DialogHeader>
           <DialogTitle>Detalhes da Venda #{sale.id.slice(-6)}</DialogTitle>
           <DialogDescription>Informações completas sobre a transação realizada.</DialogDescription>
         </DialogHeader>
 
         <div className="flex-grow min-h-0">
-          <ScrollArea className="h-full pr-6">
+          <ScrollArea className="h-full pr-2 sm:pr-6">
             <div className="space-y-6">
               <div className="p-4 border rounded-lg">
                 <h3 className="font-semibold mb-4">Informações Gerais</h3>
-                <div className="grid grid-cols-2 md:grid-cols-3 gap-y-4 gap-x-2">
+                <div className="grid grid-cols-1 gap-x-2 gap-y-4 sm:grid-cols-2 md:grid-cols-3">
                   <InfoItem icon={User} label="Vendido por" value={sale.user} />
                   <InfoItem icon={Calendar} label="Data" value={formatDate(sale.date)} />
                   <InfoItem icon={Clock} label="Hora" value={sale.time} />
@@ -193,7 +193,7 @@ export function SaleDetailsDialog({ isOpen, onOpenChange, sale }: SaleDetailsDia
                 <h3 className="font-semibold mb-2 flex items-center gap-2">
                   <ShoppingCart className="h-5 w-5" /> Itens Vendidos
                 </h3>
-                <div className="border rounded-lg">
+                <div className="overflow-x-auto rounded-lg border">
                   <Table>
                     <TableHeader>
                       <TableRow>

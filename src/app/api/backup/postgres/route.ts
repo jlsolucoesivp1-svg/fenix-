@@ -1,7 +1,16 @@
+import { requirePermission } from '@/lib/server/authz';
 import { exportSqlSnapshot } from '@/lib/server/postgres';
 
 export async function GET() {
   try {
+    const authResult = await requirePermission(
+      'accessDangerZone',
+      'Voce nao tem permissao para exportar o backup SQL.'
+    );
+    if (authResult instanceof Response) {
+      return authResult;
+    }
+
     const sql = await exportSqlSnapshot();
     const timestamp = new Date().toISOString().replace(/[:.]/g, '-');
 

@@ -31,14 +31,37 @@ yarn-error.log*
 .pnpm-debug.log*
 
 # vercel
-.vercel
+/.vercel/
 
 # typescript
 *.tsbuildinfo
 next-env.d.ts
 
 .genkit/*
+
+# local environment files (keep only the sanitized template in Git)
 .env*
+!.env.example
+
+# backups, database dumps and recovery artifacts
+/backups/
+*backup*.sql
+*backup*.json
+*.sql.bak
+*.json.bak
+*.dump
+*.sql.gz
+
+# temporary files and local operation logs
+tmp-*.log
+restore-log.txt
+*.tmp
+*.temp
+*.swp
+*~
+
+# generated Supabase CLI metadata (may include connection information)
+/supabase/.temp/
 
 # firebase
 firebase-debug.log

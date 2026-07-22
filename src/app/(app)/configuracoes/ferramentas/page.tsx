@@ -5,8 +5,8 @@ import * as React from 'react';
 import { Card, CardHeader, CardTitle, CardDescription, CardContent, CardFooter } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { useToast } from '@/hooks/use-toast';
-import { UploadCloud, FileUp, DatabaseZap, CheckCircle, AlertTriangle, Users, FileSpreadsheet } from 'lucide-react';
-import { importCustomers, restoreBackup } from '@/lib/storage';
+import { UploadCloud, FileUp, DatabaseZap, CheckCircle, AlertTriangle, Users, FileSpreadsheet, Shield, Building2, RefreshCcw } from 'lucide-react';
+import { bootstrapSaasTenant, importCustomers, restoreBackup } from '@/lib/storage';
 import type { Customer } from '@/types';
 import {
   AlertDialog,
@@ -20,6 +20,9 @@ import {
 } from '@/components/ui/alert-dialog';
 import { Label } from '@/components/ui/label';
 import { RadioGroup, RadioGroupItem } from '@/components/ui/radio-group';
+import { Input } from '@/components/ui/input';
+import { Badge } from '@/components/ui/badge';
+import { useCurrentAppSession } from '@/hooks/use-current-app-session';
 
 interface BackupDataSummary {
   customers: number;
@@ -33,6 +36,7 @@ interface BackupDataSummary {
 
 export default function FerramentasPage() {
   const { toast } = useToast();
+  const session = useCurrentAppSession();
   const [isDragOver, setIsDragOver] = React.useState(false);
   const [backupFile, setBackupFile] = React.useState<File | null>(null);
   const [backupContent, setBackupContent] = React.useState<any>(null);
@@ -44,6 +48,18 @@ export default function FerramentasPage() {
   const [maposCustomersPreview, setMaposCustomersPreview] = React.useState<Customer[]>([]);
   const [maposImportMode, setMaposImportMode] = React.useState<'merge' | 'replace'>('merge');
   const [isImportingMapos, setIsImportingMapos] = React.useState(false);
+  const [bootstrapSecret, setBootstrapSecret] = React.useState('');
+  const [supabaseUserId, setSupabaseUserId] = React.useState('');
+  const [bootstrapCompanySlug, setBootstrapCompanySlug] = React.useState('');
+  const [bootstrapTradeName, setBootstrapTradeName] = React.useState('');
+  const [bootstrapLegalName, setBootstrapLegalName] = React.useState('');
+  const [isBootstrappingSaas, setIsBootstrappingSaas] = React.useState(false);
+
+  React.useEffect(() => {
+    if (session.supabaseUser?.id) {
+      setSupabaseUserId((current) => current || session.supabaseUser?.id || '');
+    }
+  }, [session.supabaseUser?.id]);
 
   const parseCsvLine = (line: string): string[] => {
     const result: string[] = [];
@@ -275,10 +291,188 @@ export default function FerramentasPage() {
     }
   };
 
+  const handleSaasBootstrap = async () => {
+    if (!bootstrapSecret.trim()) {
+      toast({
+        variant: 'destructive',
+        title: 'Segredo obrigatorio',
+        description: 'Informe o SAAS_BOOTSTRAP_SECRET antes de executar o bootstrap.',
+      });
+      return;
+    }
+
+    if (!supabaseUserId.trim()) {
+      toast({
+        variant: 'destructive',
+        title: 'Usuario Supabase obrigatorio',
+        description: 'Informe o supabaseUserId que sera vinculado como admin inicial.',
+      });
+      return;
+    }
+
+    try {
+      setIsBootstrappingSaas(true);
+      const result = await bootstrapSaasTenant({
+        supabaseUserId,
+        bootstrapSecret,
+        companySlug: bootstrapCompanySlug,
+        companyTradeName: bootstrapTradeName,
+        companyLegalName: bootstrapLegalName,
+        forceSetActiveCompany: true,
+      });
+
+      toast({
+        title: 'Bootstrap SaaS concluido',
+        description: `Empresa ${result.companySlug} vinculada ao usuario ${result.authUserId}.`,
+      });
+    } catch (error: any) {
+      toast({
+        variant: 'destructive',
+        title: 'Erro no bootstrap SaaS',
+        description: error?.message || 'Nao foi possivel concluir o bootstrap.',
+      });
+    } finally {
+      setIsBootstrappingSaas(false);
+    }
+  };
+
 
   return (
     <>
       <div className="space-y-6">
+        <Card>
+          <CardHeader>
+            <CardTitle>Diagnostico SaaS</CardTitle>
+            <CardDescription>
+              Inspecione a sessao atual do runtime SaaS e execute o bootstrap administrativo da primeira empresa.
+            </CardDescription>
+          </CardHeader>
+          <CardContent className="space-y-6">
+            <div className="grid gap-4 md:grid-cols-2 xl:grid-cols-4">
+              <div className="rounded-lg border p-4">
+                <div className="mb-2 flex items-center gap-2 text-sm font-medium">
+                  <Shield className="h-4 w-4" />
+                  Auth Source
+                </div>
+                <Badge variant="outline">{session.authSource}</Badge>
+              </div>
+              <div className="rounded-lg border p-4">
+                <div className="mb-2 flex items-center gap-2 text-sm font-medium">
+                  <Users className="h-4 w-4" />
+                  Supabase User
+                </div>
+                <p className="break-all text-sm text-muted-foreground">
+                  {session.supabaseUser?.id || 'nenhum'}
+                </p>
+              </div>
+              <div className="rounded-lg border p-4">
+                <div className="mb-2 flex items-center gap-2 text-sm font-medium">
+                  <Building2 className="h-4 w-4" />
+                  Active Company
+                </div>
+                <p className="break-all text-sm text-muted-foreground">
+                  {session.tenantContext?.activeCompanyId || 'nenhuma'}
+                </p>
+              </div>
+              <div className="rounded-lg border p-4">
+                <div className="mb-2 flex items-center gap-2 text-sm font-medium">
+                  <RefreshCcw className="h-4 w-4" />
+                  Tenant Access
+                </div>
+                <Badge variant={session.tenantAccess?.canAccessTenant ? 'default' : 'secondary'}>
+                  {session.tenantAccess?.status || 'indisponivel'}
+                </Badge>
+              </div>
+            </div>
+
+            <div className="rounded-lg border p-4">
+              <p className="mb-3 text-sm font-medium">Estado detalhado da sessao</p>
+              <pre className="overflow-x-auto rounded bg-muted p-3 text-xs">
+                {JSON.stringify(
+                  {
+                    user: session.user
+                      ? {
+                          id: session.user.id,
+                          name: session.user.name,
+                          login: session.user.login,
+                        }
+                      : null,
+                    authSource: session.authSource,
+                    supabaseUser: session.supabaseUser,
+                    tenantContext: session.tenantContext,
+                    tenantAccess: session.tenantAccess,
+                  },
+                  null,
+                  2
+                )}
+              </pre>
+            </div>
+
+            <Card>
+              <CardHeader>
+                <CardTitle>Bootstrap Inicial da Empresa</CardTitle>
+                <CardDescription>
+                  Vincula um usuario existente no Supabase Auth como admin inicial da empresa bootstrapada.
+                </CardDescription>
+              </CardHeader>
+              <CardContent className="grid gap-4 md:grid-cols-2">
+                <div className="space-y-2 md:col-span-2">
+                  <Label htmlFor="bootstrap-secret">Segredo de Bootstrap</Label>
+                  <Input
+                    id="bootstrap-secret"
+                    type="password"
+                    value={bootstrapSecret}
+                    onChange={(e) => setBootstrapSecret(e.target.value)}
+                    placeholder="SAAS_BOOTSTRAP_SECRET"
+                  />
+                </div>
+                <div className="space-y-2">
+                  <Label htmlFor="supabase-user-id">Supabase User ID</Label>
+                  <Input
+                    id="supabase-user-id"
+                    value={supabaseUserId}
+                    onChange={(e) => setSupabaseUserId(e.target.value)}
+                    placeholder="UUID do auth.users"
+                  />
+                </div>
+                <div className="space-y-2">
+                  <Label htmlFor="bootstrap-company-slug">Slug da Empresa</Label>
+                  <Input
+                    id="bootstrap-company-slug"
+                    value={bootstrapCompanySlug}
+                    onChange={(e) => setBootstrapCompanySlug(e.target.value)}
+                    placeholder="opcional"
+                  />
+                </div>
+                <div className="space-y-2">
+                  <Label htmlFor="bootstrap-trade-name">Nome Fantasia</Label>
+                  <Input
+                    id="bootstrap-trade-name"
+                    value={bootstrapTradeName}
+                    onChange={(e) => setBootstrapTradeName(e.target.value)}
+                    placeholder="opcional"
+                  />
+                </div>
+                <div className="space-y-2">
+                  <Label htmlFor="bootstrap-legal-name">Razao Social</Label>
+                  <Input
+                    id="bootstrap-legal-name"
+                    value={bootstrapLegalName}
+                    onChange={(e) => setBootstrapLegalName(e.target.value)}
+                    placeholder="opcional"
+                  />
+                </div>
+              </CardContent>
+              <CardFooter className="justify-end border-t px-6 py-4">
+                <Button onClick={handleSaasBootstrap} disabled={isBootstrappingSaas}>
+                  <Shield className="mr-2 h-4 w-4" />
+                  {isBootstrappingSaas ? 'Executando bootstrap...' : 'Executar Bootstrap SaaS'}
+                </Button>
+              </CardFooter>
+            </Card>
+          </CardContent>
+        </Card>
+
         <Card>
           <CardHeader>
             <CardTitle>Importar Clientes do MapOS</CardTitle>

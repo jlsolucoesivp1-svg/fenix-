@@ -2,7 +2,10 @@ import { NextResponse } from 'next/server';
 import type { ServiceOrder, StockItem } from '@/types';
 import { requirePermission } from '@/lib/server/authz';
 import { syncServiceOrderStock } from '@/lib/service-order-stock';
+import { requireSaasPermission } from '@/lib/server/saas-authz';
 import { listCollectionWithClient, upsertCollectionRecordWithClient, withTransaction } from '@/lib/server/postgres';
+import { getAuthenticatedAppSession } from '@/lib/server/session';
+import { saveSaasServiceOrder } from '@/lib/server/saas-service-orders';
 
 type SaveServiceOrderPayload = {
   serviceOrder?: ServiceOrder;
@@ -28,8 +31,7 @@ const compareOrdersForList = (a: ServiceOrder, b: ServiceOrder) => {
 
 export async function POST(request: Request) {
   try {
-    const authResult = await requirePermission('accessServiceOrders', 'Voce nao tem permissao para salvar ordens de servico.');
-    if (authResult instanceof NextResponse) return authResult;
+    const appSession = await getAuthenticatedAppSession();
 
     const payload = (await request.json()) as SaveServiceOrderPayload;
     const serviceOrder = payload.serviceOrder;
@@ -37,6 +39,29 @@ export async function POST(request: Request) {
     if (!serviceOrder?.id || !serviceOrder.customerName?.trim()) {
       return NextResponse.json({ error: 'Payload invalido para salvar a OS.' }, { status: 400 });
     }
+
+    if (appSession.authSource === 'supabase-only') {
+      const saasContext = await requireSaasPermission(
+        'accessServiceOrders',
+        'Modulo de ordens de servico SaaS indisponivel para a sessao atual.',
+        'Voce nao tem permissao para salvar ordens de servico.'
+      );
+      if (saasContext instanceof NextResponse) return saasContext;
+
+      const result = await saveSaasServiceOrder({
+        accessToken: saasContext.accessToken,
+        companyId: saasContext.companyId,
+        authUserId: saasContext.userId,
+        actorDisplayName:
+          appSession.supabaseUser?.loginName || appSession.supabaseUser?.email || 'Nao identificado',
+        serviceOrder,
+      });
+
+      return NextResponse.json(result);
+    }
+
+    const authResult = await requirePermission('accessServiceOrders', 'Voce nao tem permissao para salvar ordens de servico.');
+    if (authResult instanceof NextResponse) return authResult;
 
     const result = await withTransaction(async (client) => {
       const [orders, stock] = await Promise.all([

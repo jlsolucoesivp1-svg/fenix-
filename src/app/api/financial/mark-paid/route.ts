@@ -1,7 +1,10 @@
 import { NextResponse } from 'next/server';
 import type { FinancialTransaction, ServiceOrder } from '@/types';
 import { requirePermission } from '@/lib/server/authz';
+import { requireSaasPermission } from '@/lib/server/saas-authz';
 import { listCollectionWithClient, upsertCollectionRecordWithClient, withTransaction } from '@/lib/server/postgres';
+import { getAuthenticatedAppSession } from '@/lib/server/session';
+import { markSaasFinancialTransactionPaid } from '@/lib/server/saas-financial';
 
 type MarkFinancialTransactionPaidPayload = {
   transactionId?: string;
@@ -15,8 +18,7 @@ type MarkFinancialTransactionPaidResult = {
 
 export async function POST(request: Request) {
   try {
-    const authResult = await requirePermission('accessFinancials', 'Voce nao tem permissao para alterar o financeiro.');
-    if (authResult instanceof NextResponse) return authResult;
+    const appSession = await getAuthenticatedAppSession();
 
     const payload = (await request.json()) as MarkFinancialTransactionPaidPayload;
     const transactionId = payload.transactionId?.trim();
@@ -24,6 +26,26 @@ export async function POST(request: Request) {
     if (!transactionId) {
       return NextResponse.json({ error: 'TransactionId invalido.' }, { status: 400 });
     }
+
+    if (appSession.authSource === 'supabase-only') {
+      const saasContext = await requireSaasPermission(
+        'accessFinancials',
+        'Modulo financeiro SaaS indisponivel para a sessao atual.',
+        'Voce nao tem permissao para alterar o financeiro.'
+      );
+      if (saasContext instanceof NextResponse) return saasContext;
+
+      const result = await markSaasFinancialTransactionPaid({
+        accessToken: saasContext.accessToken,
+        companyId: saasContext.companyId,
+        transactionId,
+      });
+
+      return NextResponse.json(result);
+    }
+
+    const authResult = await requirePermission('accessFinancials', 'Voce nao tem permissao para alterar o financeiro.');
+    if (authResult instanceof NextResponse) return authResult;
 
     const result = await withTransaction(async (client) => {
       const [transactions, orders] = await Promise.all([

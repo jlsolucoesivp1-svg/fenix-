@@ -1,4 +1,3 @@
-
 'use client';
 
 import * as React from 'react';
@@ -14,17 +13,9 @@ import {
 import { Input, CurrencyInput } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
 import { Popover, PopoverContent, PopoverTrigger } from '@/components/ui/popover';
-import {
-  Command,
-  CommandEmpty,
-  CommandGroup,
-  CommandInput,
-  CommandItem,
-  CommandList,
-} from '@/components/ui/command';
 import type { SaleItem, StockItem } from '@/types';
-import { cn } from '@/lib/utils';
-import { Check, ChevronsUpDown } from 'lucide-react';
+import { ChevronsUpDown } from 'lucide-react';
+import { LocalAutocomplete, highlightMatch } from '@/components/ui/local-autocomplete';
 
 interface ManualAddItemDialogProps {
   isOpen: boolean;
@@ -32,7 +23,6 @@ interface ManualAddItemDialogProps {
   onAddItem: (item: Omit<SaleItem, 'id'> & { id?: string }) => void;
   stockItems?: StockItem[];
 }
-
 const initialItemState: Omit<SaleItem, 'id'> & { id?: string } = { name: '', price: 0, quantity: 1 };
 
 export function ManualAddItemDialog({ isOpen, onOpenChange, onAddItem, stockItems = [] }: ManualAddItemDialogProps) {
@@ -101,24 +91,28 @@ export function ManualAddItemDialog({ isOpen, onOpenChange, onAddItem, stockItem
                     </Button>
                 </PopoverTrigger>
                 <PopoverContent className="w-[--radix-popover-trigger-width] p-0">
-                    <Command>
-                        <CommandInput placeholder="Buscar produto..." />
-                        <CommandList>
-                            <CommandEmpty>Nenhum produto encontrado.</CommandEmpty>
-                            <CommandGroup>
-                                {stockItems.map((stockItem) => (
-                                    <CommandItem
-                                        key={stockItem.id}
-                                        value={stockItem.name}
-                                        onSelect={() => handleSelectProduct(stockItem)}
-                                    >
-                                        <Check className={cn("mr-2 h-4 w-4", item.id === stockItem.id ? "opacity-100" : "opacity-0")} />
-                                        {stockItem.name}
-                                    </CommandItem>
-                                ))}
-                            </CommandGroup>
-                        </CommandList>
-                    </Command>
+                    <div className="p-2">
+                      <LocalAutocomplete
+                        items={stockItems}
+                        selectedItem={stockItems.find((stockItem) => stockItem.id === item.id) ?? null}
+                        onSelect={(stockItem) => {
+                          if (stockItem) {
+                            handleSelectProduct(stockItem);
+                          }
+                        }}
+                        getOption={(stockItem) => ({
+                          item: stockItem,
+                          value: stockItem.name,
+                          keywords: [stockItem.category || '', stockItem.barcode || ''],
+                        })}
+                        renderItem={(stockItem, query) => (
+                          <span className="block truncate">{highlightMatch(stockItem.name, query)}</span>
+                        )}
+                        placeholder="Buscar produto..."
+                        emptyMessage="Nenhum produto encontrado."
+                        inputClassName="border-0 shadow-none focus-visible:ring-0"
+                      />
+                    </div>
                 </PopoverContent>
             </Popover>
           </div>

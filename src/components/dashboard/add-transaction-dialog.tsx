@@ -23,6 +23,7 @@ import {
 import { useToast } from '@/hooks/use-toast';
 import type { FinancialTransaction } from '@/types';
 import { Printer } from 'lucide-react';
+import { FINANCIAL_PAYMENT_METHODS } from '@/lib/payment-methods';
 
 interface AddTransactionDialogProps {
   isOpen: boolean;
@@ -86,7 +87,7 @@ export function AddTransactionDialog({ isOpen, onOpenChange, type, onSave }: Add
 
   const categories = type === 'receita'
     ? ['Venda de Produto', 'Venda de Serviço', 'Outra Receita']
-    : ['Compra de Peça', 'Salário', 'Aluguel', 'Outra Despesa'];
+    : ['Compra de Peça', 'Compra de Mercadoria', 'Salário', 'Aluguel', 'Outra Despesa'];
 
   return (
     <Dialog open={isOpen} onOpenChange={onOpenChange}>
@@ -150,11 +151,11 @@ export function AddTransactionDialog({ isOpen, onOpenChange, type, onSave }: Add
                 <SelectValue />
               </SelectTrigger>
               <SelectContent>
-                <SelectItem value="Dinheiro">Dinheiro</SelectItem>
-                <SelectItem value="PIX">PIX</SelectItem>
-                <SelectItem value="Cartão de Crédito">Cartão de Crédito</SelectItem>
-                <SelectItem value="Cartão de Débito">Cartão de Débito</SelectItem>
-                <SelectItem value="Transferência">Transferência Bancária</SelectItem>
+                {FINANCIAL_PAYMENT_METHODS.map((method) => (
+                  <SelectItem key={method} value={method}>
+                    {method === 'Transferência' ? 'Transferência Bancária' : method}
+                  </SelectItem>
+                ))}
               </SelectContent>
             </Select>
           </div>

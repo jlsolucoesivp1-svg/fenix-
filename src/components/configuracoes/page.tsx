@@ -8,7 +8,7 @@ import { Label } from "@/components/ui/label";
 import { Input } from "@/components/ui/input";
 import { Button } from "@/components/ui/button";
 import { useToast } from '@/hooks/use-toast';
-import { Save, Download, Upload, AlertTriangle, Trash2, PlusCircle, Users, KeyRound, Phone, User as UserIcon, Building, Image as ImageIcon, X, Wrench, ShieldCheck, QrCode, Calendar, Music, FileQuote, Package, PackagePlus, Paintbrush, ExternalLink, FileSignature } from 'lucide-react';
+import { Save, Download, Upload, AlertTriangle, Trash2, PlusCircle, Users, KeyRound, Phone, User as UserIcon, Building, Image as ImageIcon, X, Wrench, ShieldCheck, QrCode, Calendar, Music, Package, PackagePlus, Paintbrush, ExternalLink, FileSignature } from 'lucide-react';
 import { AlertDialog, AlertDialogAction, AlertDialogCancel, AlertDialogContent, AlertDialogDescription, AlertDialogFooter, AlertDialogHeader, AlertDialogTitle, AlertDialogTrigger } from '@/components/ui/alert-dialog';
 import {
   Dialog,
@@ -64,6 +64,8 @@ const initialNewUser: Partial<User> = {
   },
 };
 
+const defaultPermissions: UserPermissions = initialNewUser.permissions as UserPermissions;
+
 export default function ConfiguracoesPage() {
   const { toast } = useToast();
   const { user: currentUser } = useCurrentUser();
@@ -111,7 +113,8 @@ export default function ConfiguracoesPage() {
     setNewUser(prev => ({
       ...prev,
       permissions: {
-        ...prev?.permissions,
+        ...defaultPermissions,
+        ...(prev.permissions ?? {}),
         [permission]: checked
       }
     }));
@@ -215,46 +218,23 @@ export default function ConfiguracoesPage() {
 
   const handleBackup = async () => {
     try {
-      const dataTypes = ['customers', 'serviceOrders', 'sales', 'financialTransactions', 'users', 'companyInfo', 'settings', 'quotes', 'appointments', 'kits', 'stock'];
-      const dataPromises = dataTypes.map(async (type) => {
-        switch(type) {
-            case 'customers': return { key: type, data: await getCustomers() };
-            case 'serviceOrders': return { key: type, data: await getServiceOrders() };
-            case 'sales': return { key: type, data: await getSales() };
-            case 'financialTransactions': return { key: type, data: await getFinancialTransactions() };
-            case 'users': return { key: type, data: await getUsers() };
-            case 'companyInfo': return { key: type, data: await getCompanyInfo() };
-            case 'settings': return { key: type, data: await getSettings() };
-            case 'quotes': return { key: type, data: await getQuotes() };
-            case 'appointments': return { key: type, data: await getAppointments() };
-            case 'kits': return { key: type, data: await getKits() };
-            case 'stock': return { key: type, data: await getStock() };
-            default: return null;
-        }
+      const response = await fetch('/api/backup/json', {
+        method: 'GET',
+        credentials: 'include',
       });
-      
-      const resolvedData = (await Promise.all(dataPromises)).filter(Boolean);
-      const backupData = resolvedData.reduce((acc, item) => {
-        if(item) acc[item.key] = item.data;
-        return acc;
-      }, {} as Record<string, any>);
 
-      const fullBackup = {
-        metadata: {
-            version: 1,
-            createdAt: new Date().toISOString(),
-            appName: 'Assistec Now'
-        },
-        data: backupData
-      };
+      if (!response.ok) {
+        throw new Error('Nao foi possivel exportar o backup completo.');
+      }
 
-      const jsonString = JSON.stringify(fullBackup, null, 2);
+      const payload = await response.json();
+      const jsonString = JSON.stringify(payload, null, 2);
       const blob = new Blob([jsonString], { type: 'application/json' });
       const url = URL.createObjectURL(blob);
       const link = document.createElement('a');
       const date = new Date().toISOString().split('T')[0];
       link.href = url;
-      link.download = `backup-assistec-now-${date}.json`;
+      link.download = `backup-sistema-fenix-${date}.json`;
       document.body.appendChild(link);
       link.click();
       document.body.removeChild(link);
@@ -312,10 +292,8 @@ export default function ConfiguracoesPage() {
     if (editingUser) {
       const userToUpdate: User = { ...editingUser, ...newUser };
       if (newUser.password) {
-        // Encode password only if it has changed
-        userToUpdate.password = btoa(newUser.password);
+        userToUpdate.password = newUser.password;
       } else {
-        // Keep the old encoded password
         userToUpdate.password = editingUser.password;
       }
       updatedUsers = users.map(u => u.id === editingUser.id ? userToUpdate : u);
@@ -325,7 +303,7 @@ export default function ConfiguracoesPage() {
         id: `USER-${Date.now()}`,
         name: newUser.name!,
         login: newUser.login!,
-        password: btoa(newUser.password!), // Always encode for new users
+        password: newUser.password!,
         permissions: newUser.permissions!,
       };
       updatedUsers = [...users, userToAdd];

@@ -1,4 +1,3 @@
-
 'use client';
 
 import * as React from 'react';
@@ -10,9 +9,11 @@ import { FileDown, Calendar, User, Wrench, HardDrive, HelpCircle, FileText, Shop
 import { Badge } from '../ui/badge';
 import { cn } from '@/lib/utils';
 import { add, isValid, parseISO } from 'date-fns';
-import { Input } from '../ui/input';
+import type { Duration } from 'date-fns';
 import { getSettings } from '@/lib/storage';
 import { generateCustomerHistoryPdf } from '@/lib/pdf-generators/customer-history-pdf-generator';
+import { formatServiceOrderNumber } from '@/lib/service-order-id';
+import { DebouncedSearchInput } from '../ui/debounced-search-input';
 
 
 const formatDate = (dateString: string | undefined) => {
@@ -34,7 +35,6 @@ const formatDate = (dateString: string | undefined) => {
         timeZone: 'UTC',
     }).format(date);
 };
-
 const getEquipmentName = (equipment: any): string => {
   if (typeof equipment === 'string') {
     return equipment;
@@ -103,13 +103,11 @@ export function ServiceHistory({ history }: ServiceHistoryProps) {
           </div>
           <div className="flex items-center gap-2">
             <div className="relative">
-              <Search className="absolute left-2.5 top-2.5 h-4 w-4 text-muted-foreground" />
-              <Input
-                type="search"
-                placeholder="Filtrar por nº OS..."
-                className="w-full rounded-lg bg-background pl-8 sm:w-[200px]"
-                value={searchTerm}
-                onChange={(e) => setSearchTerm(e.target.value)}
+              <DebouncedSearchInput
+                defaultValue={searchTerm}
+                onDebouncedChange={setSearchTerm}
+                placeholder="Filtrar por n� OS..."
+                className="w-full sm:w-[200px]"
               />
             </div>
             <Button variant="outline" size="sm" onClick={exportToPdf} disabled={filteredHistory.length === 0}>
@@ -135,7 +133,7 @@ export function ServiceHistory({ history }: ServiceHistoryProps) {
                           {equipmentName}
                         </p>
                         <p className="text-sm text-muted-foreground text-left">
-                          OS #{order.id.slice(-4)} - {formatDate(order.date || (order as any).entryDate)}
+                          OS #{formatServiceOrderNumber(order.id)} - {formatDate(order.date || (order as any).entryDate)}
                         </p>
                       </div>
                     </div>
@@ -260,5 +258,3 @@ const WarrantyInfo = ({ order }: { order: ServiceOrder }) => {
 
   return <InfoItem icon={warrantyIcon} label="Período de Garantia" value={warrantyInfoText} />
 };
-
-    

@@ -18,7 +18,7 @@ import type { jsPDF } from 'jspdf';
 import JsBarcode from 'jsbarcode';
 import { useToast } from '@/hooks/use-toast';
 import type { StockItem, CompanyInfo } from '@/types';
-import { getCompanyInfo } from '@/lib/storage';
+import { getEffectiveCompanyInfo } from '@/lib/storage';
 
 interface PrintLabelDialogProps {
   item: StockItem | null;
@@ -59,7 +59,7 @@ export function PrintLabelDialog({ item, isOpen, onOpenChange }: PrintLabelDialo
       });
 
       const barcodeDataUrl = canvasRef.current.toDataURL('image/png');
-      const companyInfo = await getCompanyInfo();
+      const companyInfo = await getEffectiveCompanyInfo();
 
       generateA4Pdf(barcodeDataUrl, companyInfo);
 
@@ -87,7 +87,7 @@ export function PrintLabelDialog({ item, isOpen, onOpenChange }: PrintLabelDialo
     const labelHeight = 40;
     const marginTop = 13;
     const marginBottom = 13;
-    
+
     const pageWidth = 210;
     const pageHeight = 297;
 
@@ -99,13 +99,13 @@ export function PrintLabelDialog({ item, isOpen, onOpenChange }: PrintLabelDialo
 
     let count = startPosition - 1;
     for (let i = 0; i < quantity; i++) {
-      if (count >= totalLabelsPerPage * (doc.internal.getNumberOfPages())) {
+      if (count >= totalLabelsPerPage * doc.getNumberOfPages()) {
         doc.addPage();
-        count = (doc.internal.getNumberOfPages() - 1) * totalLabelsPerPage;
+        count = (doc.getNumberOfPages() - 1) * totalLabelsPerPage;
       }
 
       const currentPage = Math.floor(count / totalLabelsPerPage) + 1;
-      if (currentPage > doc.internal.getNumberOfPages()) {
+      if (currentPage > doc.getNumberOfPages()) {
         doc.addPage();
       }
       doc.setPage(currentPage);
@@ -211,5 +211,3 @@ export function PrintLabelDialog({ item, isOpen, onOpenChange }: PrintLabelDialo
     </>
   );
 }
-
-    

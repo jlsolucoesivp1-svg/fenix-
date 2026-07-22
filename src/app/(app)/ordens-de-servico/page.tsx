@@ -61,9 +61,13 @@ import {
   getCustomers,
   getServiceOrderViewMetadata,
   getServiceOrders,
+  getTenantServiceOrderViewMetadata,
+  listTenantCustomers,
+  listTenantServiceOrders,
   getStock,
   getFinancialTransactions,
   markServiceOrderAsViewed,
+  markTenantServiceOrderAsViewed,
   salvarOrdemServicoComEstoque,
   saveFinancialTransactions,
   saveServiceOrders,
@@ -82,6 +86,8 @@ import Link from 'next/link';
 import { useToast } from '@/hooks/use-toast';
 import { generateOsPdf, type OsPdfDocumentType } from '@/lib/pdf-generators/os-pdf-generator';
 import { DebouncedSearchInput } from '@/components/ui/debounced-search-input';
+import { useCurrentAppSession } from '@/hooks/use-current-app-session';
+import { ModuleLoadingState, ModuleState } from '@/components/ui/module-state';
 
 const formatDate = (dateString: string | undefined) => {
   if (!dateString || isNaN(new Date(dateString).getTime())) {
@@ -133,6 +139,7 @@ function ServiceOrdersComponent() {
   const customerId = searchParams.get('customerId');
   const { toast } = useToast();
   const { user: currentUser } = useCurrentUser();
+  const session = useCurrentAppSession();
 
   const [orders, setOrders] = React.useState<ServiceOrder[]>([]);
   const [customers, setCustomers] = React.useState<Customer[]>([]);
@@ -147,6 +154,9 @@ function ServiceOrdersComponent() {
   const [statusFilter, setStatusFilter] = React.useState('ativas');
   const [searchFilter, setSearchFilter] = React.useState('');
   const [unreadCounts, setUnreadCounts] = React.useState<Record<string, number>>({});
+  const [loadError, setLoadError] = React.useState<string | null>(null);
+  const useSaasServiceOrders =
+    session.authSource === 'supabase-only' && session.tenantAccess?.canAccessTenant === true;
 
   const getStatusVariant = (status: string) => {
     switch (status) {
@@ -179,7 +189,9 @@ function ServiceOrdersComponent() {
     }
 
     const counts: Record<string, number> = {};
-    const viewMetadata = await getServiceOrderViewMetadata();
+    const viewMetadata = useSaasServiceOrders
+      ? await getTenantServiceOrderViewMetadata()
+      : await getServiceOrderViewMetadata();
     const viewMap = new Map(viewMetadata.map((entry) => [entry.serviceOrderId, entry.lastViewedAt]));
 
     for (const order of ordersToCheck) {
@@ -198,7 +210,7 @@ function ServiceOrdersComponent() {
     }
 
     setUnreadCounts(counts);
-  }, []);
+  }, [useSaasServiceOrders]);
 
   const handleNewOrderClick = React.useCallback((customer?: Customer | null) => {
     setCustomerForNewOS(customer ?? null);
@@ -210,7 +222,11 @@ function ServiceOrdersComponent() {
     setIsLoading(true);
 
     try {
-      const [loadedOrders, loadedCustomers] = await Promise.all([getServiceOrders(), getCustomers()]);
+      const [loadedOrders, loadedCustomers] = await Promise.all(
+        useSaasServiceOrders
+          ? [listTenantServiceOrders(), listTenantCustomers()]
+          : [getServiceOrders(), getCustomers()]
+      );
       const sortedOrders = loadedOrders.sort((a, b) => new Date(b.date).getTime() - new Date(a.date).getTime());
 
       setOrders(sortedOrders);
@@ -223,7 +239,9 @@ function ServiceOrdersComponent() {
           handleNewOrderClick(customer);
         }
       }
-    } catch {
+    } catch (error) {
+      const message = error instanceof Error ? error.message : 'Nao foi possivel buscar os dados.';
+      setLoadError(message);
       toast({
         variant: 'destructive',
         title: 'Erro ao carregar dados',
@@ -232,10 +250,14 @@ function ServiceOrdersComponent() {
     } finally {
       setIsLoading(false);
     }
-  }, [calculateUnreadCounts, customerId, handleNewOrderClick, toast]);
+  }, [calculateUnreadCounts, customerId, handleNewOrderClick, toast, useSaasServiceOrders]);
 
   React.useEffect(() => {
-    loadData();
+    if (session.isLoading) {
+      return;
+    }
+
+    void loadData();
 
     const handleStorageChange = () => {
       void loadData();
@@ -248,7 +270,7 @@ function ServiceOrdersComponent() {
       window.removeEventListener('storage-change-serviceOrders', handleStorageChange);
       window.removeEventListener('storage-change-customers', handleStorageChange);
     };
-  }, [loadData]);
+  }, [loadData, session.isLoading]);
 
   React.useEffect(() => {
     const handleKeyDown = (event: KeyboardEvent) => {
@@ -288,7 +310,11 @@ function ServiceOrdersComponent() {
     const currentOrder = orders.find((entry) => entry.id === order.id);
     setCommentsOrder(currentOrder || order);
 
-    await markServiceOrderAsViewed(order.id);
+    if (useSaasServiceOrders) {
+      await markTenantServiceOrderAsViewed(order.id);
+    } else {
+      await markServiceOrderAsViewed(order.id);
+    }
     await calculateUnreadCounts(orders);
     setIsCommentsDialogOpen(true);
   };
@@ -315,9 +341,20 @@ function ServiceOrdersComponent() {
 
     updatedOrders = updatedOrders.sort((a, b) => new Date(b.date).getTime() - new Date(a.date).getTime());
 
-    await saveServiceOrders(updatedOrders);
+    if (!useSaasServiceOrders) {
+      await saveServiceOrders(updatedOrders);
+    } else {
+      const targetOrder = updatedOrders.find((order) => order.id === orderId);
+      if (targetOrder) {
+        await salvarOrdemServicoComEstoque({ serviceOrder: targetOrder });
+      }
+    }
     setOrders(updatedOrders);
-    await markServiceOrderAsViewed(orderId);
+    if (useSaasServiceOrders) {
+      await markTenantServiceOrderAsViewed(orderId);
+    } else {
+      await markServiceOrderAsViewed(orderId);
+    }
     await calculateUnreadCounts(updatedOrders);
     window.dispatchEvent(new Event('storage'));
 
@@ -346,10 +383,10 @@ function ServiceOrdersComponent() {
       handleSheetOpenChange(false);
 
       toast({
-        title: orderExistsInState ? 'Ordem de ServiÃ§o Atualizada!' : 'Ordem de ServiÃ§o Salva!',
+        title: orderExistsInState ? 'Ordem de Servico Atualizada!' : 'Ordem de Servico Salva!',
         description: orderExistsInState
           ? 'Os dados da OS foram salvos com sucesso.'
-          : 'A nova ordem de serviÃ§o foi registrada com sucesso.',
+          : 'A nova ordem de servico foi registrada com sucesso.',
       });
       return;
     } catch (error) {
@@ -358,10 +395,11 @@ function ServiceOrdersComponent() {
         (
           error.message.includes('Falha na requisicao: 404') ||
           error.message.includes('Falha na requisicao: 405') ||
-          error.message.includes('Failed to fetch')
+          error.message.includes('Failed to fetch') ||
+          error.message.includes('Modulo de ordens de servico SaaS indisponivel')
         );
 
-      if (!canFallback) {
+      if (useSaasServiceOrders || !canFallback) {
         toast({
           variant: 'destructive',
           title: 'Erro ao salvar OS',
@@ -449,8 +487,8 @@ function ServiceOrdersComponent() {
       setOrders(updatedOrders);
 
       toast({
-        title: 'OS ExcluÃ­da com Sucesso!',
-        description: `A OS #${formatServiceOrderNumber(orderId)} foi removida, o estoque e as finanÃ§as foram ajustados.`,
+        title: 'OS Excluida com Sucesso!',
+        description: `A OS #${formatServiceOrderNumber(orderId)} foi removida, o estoque e as financas foram ajustados.`,
       });
       return;
     } catch (error) {
@@ -459,10 +497,11 @@ function ServiceOrdersComponent() {
         (
           error.message.includes('Falha na requisicao: 404') ||
           error.message.includes('Falha na requisicao: 405') ||
-          error.message.includes('Failed to fetch')
+          error.message.includes('Failed to fetch') ||
+          error.message.includes('Modulo de ordens de servico SaaS indisponivel')
         );
 
-      if (!canFallback) {
+      if (useSaasServiceOrders || !canFallback) {
         toast({
           variant: 'destructive',
           title: 'Erro ao excluir OS',
@@ -523,11 +562,11 @@ function ServiceOrdersComponent() {
     }
 
     if (!order.id) {
-      toast({ variant: 'destructive', title: 'Erro', description: 'A OS selecionada n�f£o possui identificador v�f¡lido para impress�f£o.' });
+      toast({ variant: 'destructive', title: 'Erro', description: 'A OS selecionada nao possui identificador valido para impressao.' });
       return;
     }
 
-    console.info('[print] Solicitando gera�f§�f£o de documento da OS', {
+    console.info('[print] Solicitando geracao de documento da OS', {
       documentType,
       orderId: order.id,
       customerId: order.customerId,
@@ -544,7 +583,7 @@ function ServiceOrdersComponent() {
       toast({
         variant: 'destructive',
         title: 'Erro ao imprimir',
-        description: 'N�f£o foi poss�f­vel gerar o documento selecionado. Verifique os dados da OS e tente novamente.',
+        description: 'Nao foi possivel gerar o documento selecionado. Verifique os dados da OS e tente novamente.',
       });
     }
   };
@@ -565,9 +604,10 @@ function ServiceOrdersComponent() {
     }
 
     return (
-      error.message.includes('Falha na requisicao: 404') ||
-      error.message.includes('Falha na requisicao: 405') ||
-      error.message.includes('Failed to fetch')
+          error.message.includes('Falha na requisicao: 404') ||
+          error.message.includes('Falha na requisicao: 405') ||
+          error.message.includes('Failed to fetch') ||
+          error.message.includes('Modulo de ordens de servico SaaS indisponivel')
     );
   };
 
@@ -652,13 +692,13 @@ function ServiceOrdersComponent() {
         title: nextStatus === 'Aguardando Pagamento' ? 'OS aguardando pagamento!' : 'Ordem Finalizada!',
         description:
           nextStatus === 'Aguardando Pagamento'
-            ? `A OS #${formatServiceOrderNumber(orderId)} foi concluÃ­da com lanÃ§amento pendente no financeiro.`
+            ? `A OS #${formatServiceOrderNumber(orderId)} foi concluida com lancamento pendente no financeiro.`
             : `A OS #${formatServiceOrderNumber(orderId)} foi finalizada e o financeiro atualizado.`,
       });
 
       handleCloseFinalizeDialog();
     } catch (error) {
-      if (shouldUseLegacyFinalizeOrderFallback(error)) {
+      if (!useSaasServiceOrders && shouldUseLegacyFinalizeOrderFallback(error)) {
         await handleFinalizeSaveLegacy({
           orderId,
           newPayments,
@@ -714,8 +754,25 @@ function ServiceOrdersComponent() {
     return result.sort(compareOrdersForList);
   }, [orders, searchFilter, statusFilter]);
 
-  if (isLoading) {
-    return <div>Carregando ordens de serviço...</div>;
+  if (session.isLoading || isLoading) {
+    return (
+      <ModuleLoadingState
+        title="Carregando ordens de servico"
+        description="Sincronizando clientes, OS e comentarios do contexto atual."
+      />
+    );
+  }
+
+  if (loadError) {
+    return (
+      <ModuleState
+        title="Nao foi possivel carregar ordens de servico"
+        description={loadError}
+        tone="destructive"
+        actionLabel="Tentar novamente"
+        onAction={() => void loadData()}
+      />
+    );
   }
 
   return (
@@ -766,7 +823,7 @@ function ServiceOrdersComponent() {
             <DebouncedSearchInput
               defaultValue={searchFilter}
               onDebouncedChange={setSearchFilter}
-              placeholder="Filtrar por cliente, equipamento ou n� OS..."
+              placeholder="Filtrar por cliente, equipamento ou n OS..."
               className="max-w-sm"
             />
           </div>
@@ -822,7 +879,7 @@ function ServiceOrdersComponent() {
                         </div>
                       </TableCell>
                       <TableCell className="text-right">
-                        <DropdownMenu>
+                        <DropdownMenu modal={false}>
                           <DropdownMenuTrigger asChild>
                             <Button aria-haspopup="true" size="icon" variant="ghost">
                               <MoreHorizontal className="h-4 w-4" />
@@ -945,8 +1002,18 @@ function ServiceOrdersComponent() {
                 })
               ) : (
                 <TableRow>
-                  <TableCell colSpan={6} className="h-24 text-center">
-                    Nenhuma ordem de serviço encontrada com os filtros atuais.
+                  <TableCell colSpan={6} className="p-6">
+                    <ModuleState
+                      title="Nenhuma ordem de servico encontrada"
+                      description={
+                        orders.length === 0
+                          ? 'Ainda nao existem ordens de servico registradas no contexto atual.'
+                          : 'Os filtros atuais nao retornaram ordens visiveis.'
+                      }
+                      compact
+                      actionLabel={orders.length === 0 ? 'Criar nova OS' : 'Limpar busca'}
+                      onAction={orders.length === 0 ? () => handleNewOrderClick() : () => setSearchFilter('')}
+                    />
                   </TableCell>
                 </TableRow>
               )}
@@ -979,7 +1046,14 @@ function ServiceOrdersComponent() {
 
 export default function ServiceOrdersPage() {
   return (
-    <React.Suspense fallback={<div>Carregando...</div>}>
+    <React.Suspense
+      fallback={
+        <ModuleLoadingState
+          title="Carregando modulo de ordens de servico"
+          description="Preparando lista de atendimentos."
+        />
+      }
+    >
       <ServiceOrdersComponent />
     </React.Suspense>
   );

@@ -1,5 +1,6 @@
-import type { ServiceOrder, Customer, CompanyInfo, User } from '@/types';
-import { getCompanyInfo } from '@/lib/storage';
+import type { Customer, ServiceOrder, User } from '@/types';
+import { getEffectiveCompanyInfo } from '@/lib/storage';
+import { formatServiceOrderNumber } from '@/lib/service-order-id';
 import { normalizeOptionalText, normalizeText } from '@/lib/text';
 import { jsPDF } from 'jspdf';
 import 'jspdf-autotable';
@@ -42,7 +43,7 @@ const loadImageAsDataUrl = (url: string | undefined): Promise<string | null> => 
 };
 
 export const generateLaudoPdf = async (order: ServiceOrder, customer: Customer, currentUser: User) => {
-  const companyInfo = normalizeText(await getCompanyInfo());
+  const companyInfo = normalizeText(await getEffectiveCompanyInfo());
   const normalizedOrder = normalizeText(order);
   const normalizedCustomer = normalizeText(customer);
   const normalizedUser = normalizeText(currentUser);
@@ -62,7 +63,7 @@ export const generateLaudoPdf = async (order: ServiceOrder, customer: Customer, 
 
   doc.setFont('helvetica', 'bold');
   doc.setFontSize(20);
-  doc.text(normalizeOptionalText(companyInfo.name) || 'Laudo Técnico', textX, currentY);
+  doc.text(normalizeOptionalText(companyInfo.name) || 'Laudo Tecnico', textX, currentY);
   currentY += 8;
 
   doc.setFont('helvetica', 'normal');
@@ -71,9 +72,12 @@ export const generateLaudoPdf = async (order: ServiceOrder, customer: Customer, 
     doc.text(normalizeOptionalText(companyInfo.address), textX, currentY);
     currentY += 4;
   }
+
   if (companyInfo.phone || companyInfo.emailOrSite) {
     doc.text(
-      `Telefone: ${normalizeOptionalText(companyInfo.phone)} | E-mail: ${normalizeOptionalText(companyInfo.emailOrSite)}`,
+      `Telefone: ${normalizeOptionalText(companyInfo.phone)} | E-mail: ${normalizeOptionalText(
+        companyInfo.emailOrSite
+      )}`,
       textX,
       currentY
     );
@@ -82,11 +86,15 @@ export const generateLaudoPdf = async (order: ServiceOrder, customer: Customer, 
   const rightHeaderX = pageWidth - margin;
   doc.setFontSize(14);
   doc.setFont('helvetica', 'bold');
-  doc.text('Laudo Técnico', rightHeaderX, currentY - 8, { align: 'right' });
+  doc.text('Laudo Tecnico', rightHeaderX, currentY - 8, { align: 'right' });
   doc.setFontSize(10);
   doc.setFont('helvetica', 'normal');
-  doc.text(`OS Nº: #${normalizedOrder.id.slice(-4)}`, rightHeaderX, currentY - 2, { align: 'right' });
-  doc.text(`Data Emissão: ${generationDate.toLocaleDateString('pt-BR')}`, rightHeaderX, currentY + 4, { align: 'right' });
+  doc.text(`OS Nº: #${formatServiceOrderNumber(normalizedOrder.id)}`, rightHeaderX, currentY - 2, {
+    align: 'right',
+  });
+  doc.text(`Data Emissao: ${generationDate.toLocaleDateString('pt-BR')}`, rightHeaderX, currentY + 4, {
+    align: 'right',
+  });
 
   currentY = 55;
   doc.setLineWidth(0.5);
@@ -94,7 +102,13 @@ export const generateLaudoPdf = async (order: ServiceOrder, customer: Customer, 
 
   const boxWidth = (pageWidth - margin * 2 - 5) / 2;
 
-  const drawInfoBox = (title: string, data: { [key: string]: string }, x: number, y: number, width: number) => {
+  const drawInfoBox = (
+    title: string,
+    data: Record<string, string>,
+    x: number,
+    y: number,
+    width: number
+  ) => {
     doc.setFillColor(243, 244, 246);
     doc.rect(x, y, width, 7, 'F');
     doc.setFontSize(10);
@@ -116,9 +130,9 @@ export const generateLaudoPdf = async (order: ServiceOrder, customer: Customer, 
 
   const clientData = {
     'Nome:': normalizedCustomer.name,
-    'CPF/CNPJ:': normalizedCustomer.document || 'Não informado',
-    'Telefone:': normalizedCustomer.phone || 'Não informado',
-    'Endereço:': normalizedCustomer.address || 'Não informado',
+    'CPF/CNPJ:': normalizedCustomer.document || 'Nao informado',
+    'Telefone:': normalizedCustomer.phone || 'Nao informado',
+    'Endereco:': normalizedCustomer.address || 'Nao informado',
   };
 
   const equipmentName =
@@ -128,18 +142,24 @@ export const generateLaudoPdf = async (order: ServiceOrder, customer: Customer, 
 
   const equipmentData = {
     'Equipamento:': equipmentName,
-    'Nº Série:': normalizedOrder.serialNumber || 'Não informado',
+    'Nº Serie:': normalizedOrder.serialNumber || 'Nao informado',
     'Data Entrada:': new Date(normalizedOrder.date).toLocaleDateString('pt-BR', { timeZone: 'UTC' }),
-    'Defeito Relatado:': normalizedOrder.reportedProblem || 'Não informado',
+    'Defeito Relatado:': normalizedOrder.reportedProblem || 'Nao informado',
   };
 
   const clientBoxHeight = drawInfoBox('Dados do Cliente', clientData, margin, currentY, boxWidth);
-  const equipmentBoxHeight = drawInfoBox('Informações do Equipamento', equipmentData, margin + boxWidth + 5, currentY, boxWidth);
+  const equipmentBoxHeight = drawInfoBox(
+    'Informacoes do Equipamento',
+    equipmentData,
+    margin + boxWidth + 5,
+    currentY,
+    boxWidth
+  );
   currentY = Math.max(clientBoxHeight, equipmentBoxHeight) + 10;
 
   doc.setFontSize(12);
   doc.setFont('helvetica', 'bold');
-  doc.text('ANÁLISE TÉCNICA', margin, currentY);
+  doc.text('ANALISE TECNICA', margin, currentY);
   currentY += 7;
 
   doc.setFont('helvetica', 'normal');
@@ -163,7 +183,9 @@ export const generateLaudoPdf = async (order: ServiceOrder, customer: Customer, 
   currentY += 5;
 
   doc.setFontSize(10);
-  doc.text(normalizeOptionalText(normalizedUser?.name) || 'Técnico Responsável', pageWidth / 2, currentY, { align: 'center' });
+  doc.text(normalizeOptionalText(normalizedUser?.name) || 'Tecnico Responsavel', pageWidth / 2, currentY, {
+    align: 'center',
+  });
   currentY += 4;
   doc.setFontSize(8);
   doc.text(normalizeOptionalText(companyInfo.name), pageWidth / 2, currentY, { align: 'center' });

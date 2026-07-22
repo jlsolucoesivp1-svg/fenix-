@@ -3,6 +3,7 @@
 
 import * as React from 'react';
 import {
+  AlertCircle,
   ArrowDownCircle,
   ArrowUpCircle,
   MoreHorizontal,
@@ -74,10 +75,16 @@ import {
 import { Popover, PopoverContent, PopoverTrigger } from '@/components/ui/popover';
 import { Calendar } from '@/components/ui/calendar';
 import { Label } from '@/components/ui/label';
+import { ModuleLoadingState, ModuleState } from '@/components/ui/module-state';
+import { Skeleton } from '@/components/ui/skeleton';
 import { Textarea } from '@/components/ui/textarea';
 
 import {
+  deleteTenantFinancialTransaction,
+  estornarVenda,
   getFinancialTransactions,
+  getTenantFinancialOverview,
+  marcarTransacaoComoPaga,
   saveFinancialTransactions,
   getSales,
   saveSales,
@@ -86,9 +93,11 @@ import {
   getServiceOrders,
   saveServiceOrders,
 } from '@/lib/storage';
-import type { FinancialTransaction, Sale, StockItem, ServiceOrder, CompanyInfo } from '@/types';
+import type { FinancialTransaction, Sale, StockItem, ServiceOrder } from '@/types';
 import { cn } from '@/lib/utils';
+import { formatServiceOrderNumber } from '@/lib/service-order-id';
 import { useToast } from '@/hooks/use-toast';
+import { useCurrentAppSession } from '@/hooks/use-current-app-session';
 import { PrintReceiptDialog } from '@/components/financials/print-receipt-dialog';
 import { SaleInvoiceDialog } from '@/components/sales/sale-invoice-dialog';
 import Link from 'next/link';
@@ -106,6 +115,7 @@ const formatDateForDisplay = (dateString: string | undefined) => {
 
 export default function FinanceiroPage() {
   const { toast } = useToast();
+  const session = useCurrentAppSession();
   const [allTransactions, setAllTransactions] = React.useState<FinancialTransaction[]>([]);
   const [allSales, setAllSales] = React.useState<Sale[]>([]);
   const [allServiceOrders, setAllServiceOrders] = React.useState<ServiceOrder[]>([]);
@@ -125,27 +135,58 @@ export default function FinanceiroPage() {
   const [isReversalDialogOpen, setIsReversalDialogOpen] = React.useState(false);
   const [transactionToReverse, setTransactionToReverse] = React.useState<FinancialTransaction | null>(null);
   const [reversalReason, setReversalReason] = React.useState('');
+  const [loadError, setLoadError] = React.useState<string | null>(null);
+  const useSaasFinancial =
+    session.authSource === 'supabase-only' && session.tenantAccess?.canAccessTenant === true;
 
 
   const loadData = React.useCallback(async () => {
     setIsLoading(true);
-    const [loadedTransactions, loadedSales, loadedOrders] = await Promise.all([
-        getFinancialTransactions(),
-        getSales(),
-        getServiceOrders(),
-    ]);
-    loadedTransactions.sort((a, b) => new Date(b.date).getTime() - new Date(a.date).getTime());
-    
-    setAllTransactions(loadedTransactions);
-    setAllSales(loadedSales);
-    setAllServiceOrders(loadedOrders);
-    setIsLoading(false);
-  }, []);
+    try {
+      setLoadError(null);
+      if (useSaasFinancial) {
+        const overview = await getTenantFinancialOverview();
+        const loadedTransactions = [...overview.transactions].sort(
+          (a, b) => new Date(b.date).getTime() - new Date(a.date).getTime()
+        );
+
+        setAllTransactions(loadedTransactions);
+        setAllSales(overview.sales);
+        setAllServiceOrders([]);
+      } else {
+        const [loadedTransactions, loadedSales, loadedOrders] = await Promise.all([
+            getFinancialTransactions(),
+            getSales(),
+            getServiceOrders(),
+        ]);
+        loadedTransactions.sort((a, b) => new Date(b.date).getTime() - new Date(a.date).getTime());
+
+        setAllTransactions(loadedTransactions);
+        setAllSales(loadedSales);
+        setAllServiceOrders(loadedOrders);
+      }
+    } catch (error) {
+      const message =
+        error instanceof Error ? error.message : 'Nao foi possivel carregar os dados financeiros.';
+      setLoadError(message);
+      toast({
+        variant: 'destructive',
+        title: 'Erro ao carregar financeiro',
+        description: message,
+      });
+    } finally {
+      setIsLoading(false);
+    }
+  }, [toast, useSaasFinancial]);
 
   React.useEffect(() => {
+    if (session.isLoading) {
+      return;
+    }
+
     const handleStorageChange = () => loadData();
-    
-    loadData();
+
+    void loadData();
     
     window.addEventListener('storage-change-financialTransactions', handleStorageChange);
     window.addEventListener('storage-change-serviceOrders', handleStorageChange);
@@ -156,9 +197,19 @@ export default function FinanceiroPage() {
       window.removeEventListener('storage-change-serviceOrders', handleStorageChange);
       window.removeEventListener('storage-change-sales', handleStorageChange);
     };
-  }, [loadData]);
+  }, [loadData, session.isLoading]);
 
   const handleDeleteTransaction = async (transactionId: string) => {
+    if (useSaasFinancial) {
+      await deleteTenantFinancialTransaction(transactionId);
+      const updatedTransactions = allTransactions.filter(t => t.id !== transactionId);
+      setAllTransactions(updatedTransactions);
+      toast({
+        title: 'Lancamento Excluido!',
+        description: 'A transacao foi removida do seu historico financeiro.',
+      });
+      return;
+    }
     const updatedTransactions = allTransactions.filter(t => t.id !== transactionId);
     setAllTransactions(updatedTransactions);
     await saveFinancialTransactions(updatedTransactions);
@@ -174,7 +225,20 @@ export default function FinanceiroPage() {
     setIsReversalDialogOpen(true);
   };
 
-  const handleReverseSale = async () => {
+  const shouldUseLegacyReverseSaleFallback = (error: unknown) => {
+    if (!(error instanceof Error)) {
+      return false;
+    }
+
+    return (
+      error.message.includes('Falha na requisicao: 404') ||
+      error.message.includes('Falha na requisicao: 405') ||
+      error.message.includes('Failed to fetch') ||
+      error.message.includes('Modulo de vendas SaaS indisponivel')
+    );
+  };
+
+  const handleReverseSaleLegacy = async () => {
     if (!transactionToReverse?.relatedSaleId || !reversalReason.trim()) {
         toast({
             variant: 'destructive',
@@ -227,8 +291,68 @@ export default function FinanceiroPage() {
     setTransactionToReverse(null);
   };
 
+  const handleReverseSale = async () => {
+    if (!transactionToReverse?.relatedSaleId || !reversalReason.trim()) {
+      toast({
+        variant: 'destructive',
+        title: 'Erro',
+        description: 'O motivo do estorno e obrigatorio.',
+      });
+      return;
+    }
 
-  const handleMarkAsPaid = async (txId: string) => {
+    try {
+      const result = await estornarVenda({
+        saleId: transactionToReverse.relatedSaleId,
+        reason: reversalReason.trim(),
+      });
+
+      setAllSales((currentSales) =>
+        currentSales.map((sale) => (sale.id === result.sale.id ? result.sale : sale))
+      );
+      setAllTransactions((currentTransactions) =>
+        currentTransactions.map((transaction) => {
+          const reversedTransaction = result.transactions.find((item) => item.id === transaction.id);
+          return reversedTransaction || transaction;
+        })
+      );
+
+      toast({
+        title: 'Venda Estornada!',
+        description: 'A venda foi estornada e os itens retornaram ao estoque.',
+      });
+
+      setIsReversalDialogOpen(false);
+      setTransactionToReverse(null);
+    } catch (error) {
+      if (!useSaasFinancial && shouldUseLegacyReverseSaleFallback(error)) {
+        await handleReverseSaleLegacy();
+        return;
+      }
+
+      toast({
+        variant: 'destructive',
+        title: 'Erro ao estornar venda',
+        description: error instanceof Error ? error.message : 'Nao foi possivel concluir o estorno.',
+      });
+    }
+  };
+
+
+  const shouldUseLegacyMarkAsPaidFallback = (error: unknown) => {
+    if (!(error instanceof Error)) {
+      return false;
+    }
+
+    return (
+      error.message.includes('Falha na requisicao: 404') ||
+      error.message.includes('Falha na requisicao: 405') ||
+      error.message.includes('Failed to fetch') ||
+      error.message.includes('Modulo financeiro SaaS indisponivel')
+    );
+  };
+
+  const handleMarkAsPaidLegacy = async (txId: string) => {
     let transactionToPay: FinancialTransaction | undefined;
     const updatedTransactions = allTransactions.map(tx => {
         if (tx.id === txId) {
@@ -251,19 +375,74 @@ export default function FinanceiroPage() {
             const currentOrders = await getServiceOrders();
             const updatedOrders = currentOrders.map(order => {
                 if (order.id === osId) {
-                    return { ...order, status: 'Finalizado' as const };
+                    const hasRecordedPayment = (order.payments || []).some(payment =>
+                        payment.date === transactionToPay?.date &&
+                        payment.amount === transactionToPay?.amount &&
+                        payment.method === transactionToPay?.paymentMethod
+                    );
+
+                    return {
+                        ...order,
+                        status: 'Finalizado' as const,
+                        payments: hasRecordedPayment
+                            ? order.payments
+                            : [
+                                ...(order.payments || []),
+                                {
+                                    id: `PAY-FIN-${transactionToPay?.id}`,
+                                    amount: transactionToPay?.amount || 0,
+                                    date: transactionToPay?.date || new Date().toISOString().split('T')[0],
+                                    method: transactionToPay?.paymentMethod || 'Não informado',
+                                },
+                              ],
+                    };
                 }
                 return order;
             });
             await saveServiceOrders(updatedOrders);
             setAllServiceOrders(updatedOrders);
             window.dispatchEvent(new Event('storage-change-serviceOrders')); // Notify other components
-            toast({ title: 'Ordem de Serviço Finalizada!', description: `A OS #${osId.slice(-4)} foi concluída pois todos os pagamentos foram quitados.` });
+            toast({ title: 'Ordem de Serviço Finalizada!', description: `A OS #${formatServiceOrderNumber(osId)} foi concluída pois todos os pagamentos foram quitados.` });
         } else {
              toast({ title: 'Sucesso!', description: 'Parcela marcada como paga.'});
         }
     } else {
          toast({ title: 'Sucesso!', description: 'Transação marcada como paga.'});
+    }
+  };
+
+  const handleMarkAsPaid = async (txId: string) => {
+    try {
+      const result = await marcarTransacaoComoPaga({ transactionId: txId });
+
+      setAllTransactions((currentTransactions) =>
+        currentTransactions.map((transaction) =>
+          transaction.id === result.transaction.id ? result.transaction : transaction
+        )
+      );
+
+      if (result.order) {
+        setAllServiceOrders((currentOrders) =>
+          currentOrders.map((order) => (order.id === result.order?.id ? result.order : order))
+        );
+        toast({
+          title: 'Ordem de Servico Finalizada!',
+          description: `A OS #${formatServiceOrderNumber(result.order.id)} foi concluida pois todos os pagamentos foram quitados.`,
+        });
+      } else {
+        toast({ title: 'Sucesso!', description: 'Transacao marcada como paga.' });
+      }
+    } catch (error) {
+      if (!useSaasFinancial && shouldUseLegacyMarkAsPaidFallback(error)) {
+        await handleMarkAsPaidLegacy(txId);
+        return;
+      }
+
+      toast({
+        variant: 'destructive',
+        title: 'Erro ao marcar como pago',
+        description: error instanceof Error ? error.message : 'Nao foi possivel atualizar a transacao.',
+      });
     }
   };
 
@@ -353,6 +532,16 @@ export default function FinanceiroPage() {
       saldo: saldoPeriodo,
     });
   }
+
+  const clearFilters = () => {
+    setDescriptionFilter('');
+    setTypeFilter('all');
+    setCategoryFilter('all');
+    setDateRange({
+      from: startOfMonth(new Date()),
+      to: endOfMonth(new Date()),
+    });
+  };
   
   const renderReceivablesHeader = () => {
     if (typeFilter !== 'contas_a_receber') return null;
@@ -387,26 +576,53 @@ export default function FinanceiroPage() {
     );
   };
 
-  if (isLoading) {
-    return <div>Carregando transações...</div>;
+  if (session.isLoading || isLoading) {
+    return (
+      <div className="space-y-4">
+        <ModuleLoadingState
+          title="Carregando financeiro"
+          description="Sincronizando receitas, despesas e contas a receber do contexto atual."
+        />
+        <div className="grid grid-cols-1 gap-4 md:grid-cols-3">
+          <Skeleton className="h-28 rounded-2xl" />
+          <Skeleton className="h-28 rounded-2xl" />
+          <Skeleton className="h-28 rounded-2xl" />
+        </div>
+        <Skeleton className="h-[320px] rounded-2xl" />
+      </div>
+    );
+  }
+
+  if (loadError) {
+    return (
+      <ModuleState
+        title="Nao foi possivel carregar o financeiro"
+        description={loadError}
+        icon={AlertCircle}
+        tone="destructive"
+        actionLabel="Tentar novamente"
+        onAction={() => void loadData()}
+      />
+    );
   }
 
   return (
     <>
-    <Card>
-      <CardHeader>
-        <div className="flex items-start justify-between gap-4">
-          <div>
-            <CardTitle>Controle Financeiro</CardTitle>
-            <CardDescription>
+    <div className="space-y-6">
+    <Card className="overflow-hidden border-0 bg-gradient-to-br from-background via-background to-muted/50 shadow-sm">
+      <CardHeader className="border-b bg-card/80 p-6">
+        <div className="flex flex-col gap-5 lg:flex-row lg:items-start lg:justify-between">
+          <div className="space-y-2">
+            <CardTitle className="text-2xl font-semibold tracking-tight">Controle Financeiro</CardTitle>
+            <CardDescription className="max-w-2xl text-sm leading-relaxed">
               Acompanhe suas receitas e despesas. Filtre por período para gerar relatórios.
             </CardDescription>
           </div>
-          <div className="text-right">
+          <div className="rounded-2xl border border-green-500/20 bg-green-500/10 px-5 py-4 text-left shadow-sm lg:min-w-[220px] lg:text-right">
             <p className="text-sm text-muted-foreground">Saldo do Mês</p>
             <p
               className={cn(
-                'text-2xl font-bold',
+                'mt-1 text-3xl font-bold tracking-tight',
                 monthlySummary.saldo >= 0 ? 'text-green-500' : 'text-destructive'
               )}
             >
@@ -415,9 +631,14 @@ export default function FinanceiroPage() {
           </div>
         </div>
       </CardHeader>
-      <CardContent>
-        <div className="mb-4 p-4 border rounded-lg space-y-4">
-            <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-4">
+      <CardContent className="space-y-6 p-6">
+        <div className="rounded-2xl border bg-card p-4 shadow-sm">
+          <div className="flex flex-col gap-3 lg:flex-row lg:items-center lg:justify-between">
+            <details className="group">
+              <summary className="inline-flex h-9 cursor-pointer list-none items-center justify-center rounded-md border border-input bg-background px-4 py-2 text-sm font-medium shadow-sm transition-colors hover:bg-accent hover:text-accent-foreground [&::-webkit-details-marker]:hidden">
+                Filtros
+              </summary>
+              <div className="mt-4 grid grid-cols-1 gap-3 border-t pt-4 md:grid-cols-2 xl:grid-cols-4">
                 <Input
                     placeholder="Filtrar por descrição..."
                     value={descriptionFilter}
@@ -445,6 +666,7 @@ export default function FinanceiroPage() {
                     <SelectItem value="Venda Estornada">Vendas Estornadas</SelectItem>
                     <SelectItem value="Outra Receita">Outras Receitas</SelectItem>
                     <SelectItem value="Compra de Peça">Compra de Peça</SelectItem>
+                    <SelectItem value="Compra de Mercadoria">Compra de Mercadoria</SelectItem>
                     <SelectItem value="Salário">Salário</SelectItem>
                     <SelectItem value="Aluguel">Aluguel</SelectItem>
                     <SelectItem value="Outra Despesa">Outras Despesas</SelectItem>
@@ -455,7 +677,7 @@ export default function FinanceiroPage() {
                     <Button
                       id="date"
                       variant={'outline'}
-                      className={cn( 'text-left font-normal', !dateRange && 'text-muted-foreground' )}
+                      className={cn( 'justify-start text-left font-normal', !dateRange && 'text-muted-foreground' )}
                       disabled={typeFilter === 'contas_a_receber'}
                     >
                       <CalendarIcon className="mr-2 h-4 w-4" />
@@ -469,9 +691,9 @@ export default function FinanceiroPage() {
                     <Calendar initialFocus mode="range" defaultMonth={dateRange?.from} selected={dateRange} onSelect={setDateRange} numberOfMonths={1} locale={ptBR}/>
                   </PopoverContent>
                 </Popover>
-            </div>
-            <div className="flex items-center justify-between flex-wrap gap-y-4">
-                <div className="flex items-center gap-2">
+              </div>
+            </details>
+                <div className="flex flex-wrap items-center gap-2">
                      {dateRange && typeFilter !== 'contas_a_receber' && (
                          <Button variant="ghost" size="sm" onClick={() => setDateRange(undefined)}>
                             <X className="mr-2 h-4 w-4" />
@@ -483,7 +705,7 @@ export default function FinanceiroPage() {
                         Imprimir Relatório
                      </Button>
                 </div>
-                <div className="grid grid-cols-4 gap-x-4 gap-y-2 text-sm text-right w-full md:w-auto">
+                <div className="hidden">
                     <div></div> {/* Empty cell for alignment */}
                     <div className="font-bold text-green-500">Receitas</div>
                     <div className="font-bold text-red-500">Despesas</div>
@@ -502,11 +724,39 @@ export default function FinanceiroPage() {
             </div>
         </div>
 
+        <div className="grid grid-cols-1 gap-4 md:grid-cols-3">
+          <div className="rounded-2xl border border-green-500/20 bg-green-500/10 p-5 shadow-sm">
+            <p className="text-sm font-medium text-muted-foreground">Receitas do Periodo</p>
+            <p className="mt-2 text-2xl font-bold tracking-tight text-green-500">R$ ${totalReceitas.toFixed(2)}</p>
+            <p className="mt-1 text-xs text-muted-foreground">Mes: R$ ${monthlySummary.receitas.toFixed(2)}</p>
+          </div>
+          <div className="rounded-2xl border border-red-500/20 bg-red-500/10 p-5 shadow-sm">
+            <p className="text-sm font-medium text-muted-foreground">Despesas do Periodo</p>
+            <p className="mt-2 text-2xl font-bold tracking-tight text-red-500">R$ ${totalDespesas.toFixed(2)}</p>
+            <p className="mt-1 text-xs text-muted-foreground">Mes: R$ ${monthlySummary.despesas.toFixed(2)}</p>
+          </div>
+          <div className="rounded-2xl border bg-card p-5 shadow-sm">
+            <p className="text-sm font-medium text-muted-foreground">Saldo do Periodo</p>
+            <p className={cn('mt-2 text-2xl font-bold tracking-tight', saldoPeriodo >= 0 ? "text-primary" : "text-destructive")}>
+              R$ ${saldoPeriodo.toFixed(2)}
+            </p>
+            <p className={cn('mt-1 text-xs', monthlySummary.saldo >= 0 ? "text-primary" : "text-destructive")}>
+              Mes: R$ ${monthlySummary.saldo.toFixed(2)}
+            </p>
+          </div>
+        </div>
+
         {renderReceivablesHeader()}
 
+        <div className="rounded-2xl border bg-card shadow-sm">
+        <div className="border-b bg-muted/30 px-5 py-4">
+          <CardTitle className="text-lg">Lista de Lancamentos</CardTitle>
+          <CardDescription>{filteredTransactions.length} registro(s) encontrado(s)</CardDescription>
+        </div>
+        <div className="overflow-x-auto">
         <Table>
           <TableHeader>
-            <TableRow>
+            <TableRow className="bg-muted/40 hover:bg-muted/40">
               <TableHead className="w-12"></TableHead>
               <TableHead>Descrição</TableHead>
               <TableHead>Categoria</TableHead>
@@ -522,24 +772,26 @@ export default function FinanceiroPage() {
               const valueColorClass = transaction.type === 'receita' && !isPending && !isReversed ? 'text-green-500' : isPending ? 'text-destructive' : isReversed ? 'text-gray-500 line-through' : 'text-red-500';
               
               return (
-                <TableRow key={transaction.id} className={cn(isPending && 'bg-destructive/10', isReversed && 'bg-gray-500/10')}>
-                  <TableCell>
+                <TableRow key={transaction.id} className={cn('transition-colors', isPending && 'bg-destructive/10', isReversed && 'bg-gray-500/10')}>
+                  <TableCell className="py-4">
                     {transaction.type === 'receita' ? (<ArrowUpCircle className="h-5 w-5 text-green-500" />) : (<ArrowDownCircle className="h-5 w-5 text-red-500" />)}
                   </TableCell>
-                  <TableCell className={cn('font-medium', isPending && 'text-destructive', isReversed && 'text-gray-500')}>
-                    {transaction.description}
+                  <TableCell className={cn('min-w-[260px] py-4', isPending && 'text-destructive', isReversed && 'text-gray-500')}>
+                    <div className="max-w-xl font-medium leading-snug">
+                      {transaction.description}
+                    </div>
                   </TableCell>
                   <TableCell>
-                    <Badge variant="outline">{transaction.category}</Badge>
+                    <Badge variant="outline" className="rounded-full border-muted-foreground/20 bg-muted/40 px-3 py-1 font-medium">{transaction.category}</Badge>
                   </TableCell>
-                  <TableCell className="hidden md:table-cell">
+                  <TableCell className="hidden whitespace-nowrap text-muted-foreground md:table-cell">
                     {formatDateForDisplay(transaction.dueDate || transaction.date)}
                   </TableCell>
-                  <TableCell className={cn('text-right font-semibold', valueColorClass)}>
+                  <TableCell className={cn('whitespace-nowrap text-right text-base font-semibold', valueColorClass)}>
                     {transaction.type === 'receita' ? '+' : '-'} R$ ${transaction.amount.toFixed(2)}
                   </TableCell>
                   <TableCell className="text-right">
-                    <DropdownMenu>
+                    <DropdownMenu modal={false}>
                       <DropdownMenuTrigger asChild><Button aria-haspopup="true" size="icon" variant="ghost" disabled={isReversed}><MoreHorizontal className="h-4 w-4" /><span className="sr-only">Toggle menu</span></Button></DropdownMenuTrigger>
                       <DropdownMenuContent align="end">
                         <DropdownMenuLabel>Ações</DropdownMenuLabel>
@@ -581,12 +833,30 @@ export default function FinanceiroPage() {
               );
             })}
              {filteredTransactions.length === 0 && (
-                <TableRow><TableCell colSpan={6} className="h-24 text-center">Nenhuma transação encontrada para os filtros selecionados.</TableCell></TableRow>
+                <TableRow>
+                  <TableCell colSpan={6} className="p-6">
+                    <ModuleState
+                      title="Nenhum lancamento encontrado"
+                      description={
+                        allTransactions.length === 0
+                          ? 'Ainda nao existem transacoes registradas para o contexto atual.'
+                          : 'Os filtros aplicados nao retornaram resultados neste periodo.'
+                      }
+                      icon={WalletCards}
+                      compact
+                      actionLabel={allTransactions.length === 0 ? 'Recarregar modulo' : 'Limpar filtros'}
+                      onAction={allTransactions.length === 0 ? () => void loadData() : clearFilters}
+                    />
+                  </TableCell>
+                </TableRow>
             )}
           </TableBody>
         </Table>
+        </div>
+        </div>
       </CardContent>
     </Card>
+    </div>
      <PrintReceiptDialog isOpen={isPrintDialogOpen} onOpenChange={setIsPrintDialogOpen} transaction={transactionToPrint}/>
      <SaleInvoiceDialog isOpen={isDetailsOpen} onOpenChange={setIsDetailsOpen} sale={saleForDetails}/>
 
@@ -622,5 +892,3 @@ export default function FinanceiroPage() {
     </>
   );
 }
-
-    

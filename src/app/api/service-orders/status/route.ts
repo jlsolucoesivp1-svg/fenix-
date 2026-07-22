@@ -1,7 +1,10 @@
 import { NextResponse } from 'next/server';
 import type { ServiceOrder } from '@/types';
 import { requirePermission } from '@/lib/server/authz';
+import { requireSaasPermission } from '@/lib/server/saas-authz';
 import { listCollectionWithClient, upsertCollectionRecordWithClient, withTransaction } from '@/lib/server/postgres';
+import { getAuthenticatedAppSession } from '@/lib/server/session';
+import { updateSaasServiceOrderStatus } from '@/lib/server/saas-service-orders';
 
 type UpdateServiceOrderStatusPayload = {
   orderId?: string;
@@ -15,8 +18,7 @@ type UpdateServiceOrderStatusResult = {
 
 export async function POST(request: Request) {
   try {
-    const authResult = await requirePermission('accessServiceOrders', 'Voce nao tem permissao para alterar o status das ordens de servico.');
-    if (authResult instanceof NextResponse) return authResult;
+    const appSession = await getAuthenticatedAppSession();
 
     const payload = (await request.json()) as UpdateServiceOrderStatusPayload;
     const orderId = payload.orderId?.trim();
@@ -25,6 +27,30 @@ export async function POST(request: Request) {
     if (!orderId || !nextStatus) {
       return NextResponse.json({ error: 'Payload invalido para atualizar o status da OS.' }, { status: 400 });
     }
+
+    if (appSession.authSource === 'supabase-only') {
+      const saasContext = await requireSaasPermission(
+        'accessServiceOrders',
+        'Modulo de ordens de servico SaaS indisponivel para a sessao atual.',
+        'Voce nao tem permissao para alterar o status das ordens de servico.'
+      );
+      if (saasContext instanceof NextResponse) return saasContext;
+
+      const result = await updateSaasServiceOrderStatus({
+        accessToken: saasContext.accessToken,
+        companyId: saasContext.companyId,
+        authUserId: saasContext.userId,
+        actorDisplayName:
+          appSession.supabaseUser?.loginName || appSession.supabaseUser?.email || 'Nao identificado',
+        orderId,
+        status: nextStatus,
+      });
+
+      return NextResponse.json(result);
+    }
+
+    const authResult = await requirePermission('accessServiceOrders', 'Voce nao tem permissao para alterar o status das ordens de servico.');
+    if (authResult instanceof NextResponse) return authResult;
 
     const result = await withTransaction(async (client) => {
       const orders = await listCollectionWithClient<ServiceOrder>(client, 'serviceOrders');

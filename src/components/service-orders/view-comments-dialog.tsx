@@ -15,8 +15,9 @@ import { ScrollArea } from '@/components/ui/scroll-area';
 import { Textarea } from '@/components/ui/textarea';
 import { Label } from '@/components/ui/label';
 import type { ServiceOrder, InternalNote } from '@/types';
-import { getCompanyInfo, markServiceOrderAsViewed } from '@/lib/storage';
+import { getEffectiveCompanyInfo, markEffectiveServiceOrderAsViewed } from '@/lib/storage';
 import { normalizeOptionalText, normalizeText } from '@/lib/text';
+import { formatServiceOrderNumber } from '@/lib/service-order-id';
 import { useToast } from '@/hooks/use-toast';
 
 interface ViewCommentsDialogProps {
@@ -44,7 +45,7 @@ export function ViewCommentsDialog({ isOpen, onOpenChange, serviceOrder, onComme
 
   React.useEffect(() => {
     if (isOpen && serviceOrder) {
-      void markServiceOrderAsViewed(serviceOrder.id);
+      void markEffectiveServiceOrderAsViewed(serviceOrder.id);
       setNewComment('');
     }
   }, [isOpen, serviceOrder]);
@@ -71,7 +72,7 @@ export function ViewCommentsDialog({ isOpen, onOpenChange, serviceOrder, onComme
     const { jsPDF } = await import('jspdf');
     await import('jspdf-autotable');
 
-    const companyInfo = normalizeText(await getCompanyInfo());
+    const companyInfo = normalizeText(await getEffectiveCompanyInfo());
     const normalizedServiceOrder = normalizeText(serviceOrder);
     const sortedNotes = normalizeText(sortNotesChronologically(normalizedServiceOrder.internalNotes));
 
@@ -107,7 +108,7 @@ export function ViewCommentsDialog({ isOpen, onOpenChange, serviceOrder, onComme
 
     doc.setFontSize(10);
     doc.setFont('helvetica', 'normal');
-    doc.text(`OS: #${normalizedServiceOrder.id.slice(-4)} | Cliente: ${normalizedServiceOrder.customerName}`, margin, currentY);
+    doc.text(`OS: #${formatServiceOrderNumber(normalizedServiceOrder.id)} | Cliente: ${normalizedServiceOrder.customerName}`, margin, currentY);
     currentY += 10;
 
     (doc as any).autoTable({
@@ -146,7 +147,7 @@ export function ViewCommentsDialog({ isOpen, onOpenChange, serviceOrder, onComme
     <Dialog open={isOpen} onOpenChange={(open) => onOpenChange(open, serviceOrder.id)}>
       <DialogContent className="sm:max-w-xl flex flex-col h-[70vh]">
         <DialogHeader>
-          <DialogTitle>Comentários da OS #{serviceOrder.id.slice(-4)}</DialogTitle>
+          <DialogTitle>Comentários da OS #{formatServiceOrderNumber(serviceOrder.id)}</DialogTitle>
           <DialogDescription>
             Histórico de anotações internas para o atendimento de {serviceOrder.customerName}.
           </DialogDescription>

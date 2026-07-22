@@ -1,9 +1,10 @@
 import { NextResponse } from 'next/server';
 import { clearSessionCookie } from '@/lib/server/session';
+import { clearSupabaseSessionCookies } from '@/lib/server/supabase-session';
 
 export async function POST() {
   try {
-    await clearSessionCookie();
+    await Promise.all([clearSessionCookie(), clearSupabaseSessionCookies()]);
     return NextResponse.json({ success: true });
   } catch (error) {
     console.error('Erro no logout:', error);

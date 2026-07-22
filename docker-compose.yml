@@ -1,37 +1,37 @@
 services:
-  postgres:
-    image: postgres:16-alpine
-    restart: unless-stopped
-    environment:
-      POSTGRES_DB: sistema_fenix
-      POSTGRES_USER: postgres
-      POSTGRES_PASSWORD: postgres
-    volumes:
-      - postgres_data:/var/lib/postgresql/data
-    healthcheck:
-      test: ["CMD-SHELL", "pg_isready -U postgres -d sistema_fenix"]
-      interval: 5s
-      timeout: 5s
-      retries: 20
+  # Obsoleto: o app nao usa mais o Postgres local via Docker.
+  # Mantenha este bloco apenas como referencia historica.
+  # postgres:
+  #   image: postgres:16-alpine
+  #   restart: unless-stopped
+  #   environment:
+  #     POSTGRES_DB: sistema_fenix
+  #     POSTGRES_USER: postgres
+  #     POSTGRES_PASSWORD: postgres
+  #   volumes:
+  #     - postgres_data:/var/lib/postgresql/data
+  #   healthcheck:
+  #     test: ["CMD-SHELL", "pg_isready -U postgres -d sistema_fenix"]
+  #     interval: 5s
+  #     timeout: 5s
+  #     retries: 20
 
   app:
     build:
       context: .
       dockerfile: Dockerfile
     restart: unless-stopped
-    depends_on:
-      postgres:
-        condition: service_healthy
     environment:
       NODE_ENV: production
       PORT: 3000
-      DATABASE_URL: postgresql://postgres:postgres@postgres:5432/sistema_fenix
-      SESSION_SECRET: fenix-docker-session-secret-2026-03-25
-      SESSION_COOKIE_SECURE: "false"
-      PGSSL: disable
-      SERIAL_SECRET: ${SERIAL_SECRET:-troque-esse-segredo}
+      DATABASE_URL: ${DATABASE_URL}
+      SESSION_SECRET: ${SESSION_SECRET}
+      SESSION_COOKIE_SECURE: ${SESSION_COOKIE_SECURE:-true}
+      PGSSL: ${PGSSL:-require}
+      SERIAL_SECRET: ${SERIAL_SECRET}
     ports:
       - "3001:3000"
 
-volumes:
-  postgres_data:
+# Obsoleto: volume usado apenas pelo Postgres local comentado acima.
+# volumes:
+#   postgres_data:

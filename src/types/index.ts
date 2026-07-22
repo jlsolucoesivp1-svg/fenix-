@@ -16,8 +16,11 @@ export type Customer = {
   cep?: string;
 };
 
+export type CustomerSearchResult = Pick<Customer, 'id' | 'name' | 'phone'>;
+
 export type ServiceOrderItem = {
   id: number;
+  stockItemId?: string;
   description: string;
   quantity: number;
   unitPrice: number;
@@ -35,7 +38,7 @@ export type ServiceOrder = {
   date: string; // YYYY-MM-DD
   deliveredDate?: string; // YYYY-MM-DD
   attendant: string; // Nome do atendente
-  paymentMethod?: 'Dinheiro' | 'Cartão de Crédito' | 'Cartão de Débito' | 'PIX' | 'Transferência' | 'Pendente';
+  paymentMethod?: 'Dinheiro' | 'Boleto' | 'Cartão de Crédito' | 'Cartão de Débito' | 'PIX' | 'Transferência' | 'Pendente';
   warranty?: string; // Ex: "90 dias", "1 ano para a peça"
   totalValue: number;
   discount?: number;
@@ -82,6 +85,7 @@ export type Sale = {
     paymentMethod: string;
     observations?: string;
     customerId?: string;
+    customerName?: string;
     relatedQuoteId?: string;
     status?: 'Finalizada' | 'Estornada';
     reversalReason?: string;
@@ -101,6 +105,9 @@ export type Quote = {
   customerName?: string;
   status: 'Pendente' | 'Aprovado' | 'Cancelado' | 'Vendido';
   validUntil: string; // YYYY-MM-DD
+  data_vencimento?: string; // YYYY-MM-DD
+  validityDays?: number;
+  dias_validade?: number;
 }
 
 export type FinancialTransaction = {
@@ -111,10 +118,12 @@ export type FinancialTransaction = {
     date: string; // YYYY-MM-DD
     dueDate?: string; // YYYY-MM-DD, for installments
     status?: 'pago' | 'pendente' | 'Estornado';
-    category: 'Venda de Produto' | 'Venda de Serviço' | 'Compra de Peça' | 'Salário' | 'Aluguel' | 'Outra Receita' | 'Outra Despesa' | 'Venda Estornada';
+    category: 'Venda de Produto' | 'Venda de Serviço' | 'Contas a Receber' | 'Compra de Peça' | 'Compra de Mercadoria' | 'Salário' | 'Aluguel' | 'Outra Receita' | 'Outra Despesa' | 'Venda Estornada';
     paymentMethod: string;
     relatedSaleId?: string;
     relatedServiceOrderId?: string;
+    relatedStockEntryId?: string;
+    origin?: 'manual' | 'sale' | 'service-order-payment' | 'service-order-finalization' | 'stock-entry';
 };
 
 export type UserPermissions = {
@@ -135,11 +144,16 @@ export type UserPermissions = {
   canManageUsers: boolean;
 }
 
+export type UserStatus = 'active' | 'inactive' | 'invited' | 'revoked';
+
 export type User = {
   id: string;
   name: string;
   login: string;
+  email?: string;
   password?: string;
+  status?: UserStatus;
+  isOwner?: boolean;
   permissions: UserPermissions;
 };
 
@@ -152,8 +166,10 @@ export type CompanyInfo = {
   emailOrSite: string;
   document: string; // CPF or CNPJ
   logoUrl: string;
+  logoStoragePath?: string;
   pixKey: string;
   notificationSoundUrl?: string;
+  notificationSoundStoragePath?: string;
 };
 
 export type Appointment = {
@@ -170,6 +186,36 @@ export type Appointment = {
     notes?: string;
     status: 'agendado' | 'concluido' | 'cancelado';
   };
+};
+
+export type DashboardOverview = {
+  totalCustomers: number;
+  activeOrders: number;
+  completedOrders: number;
+  todaysAppointments: Appointment[];
+};
+
+export type ServiceOrderFileSummary = {
+  path: string;
+  name: string;
+  size: number;
+  createdAt?: string | null;
+  updatedAt?: string | null;
+  mimeType?: string | null;
+  downloadUrl: string;
+};
+
+export type CompanyAssetKind = 'logo' | 'notification-sound' | 'brand-media';
+
+export type CompanyAssetSummary = {
+  path: string;
+  name: string;
+  size: number;
+  createdAt?: string | null;
+  updatedAt?: string | null;
+  mimeType?: string | null;
+  downloadUrl: string;
+  kind: CompanyAssetKind;
 };
 
 export type KitItem = {

@@ -14,7 +14,7 @@ import { RadioGroup, RadioGroupItem } from '@/components/ui/radio-group';
 import { Label } from '@/components/ui/label';
 import { Printer, ReceiptText, Sheet } from 'lucide-react';
 import { useToast } from '@/hooks/use-toast';
-import { getCompanyInfo } from '@/lib/storage';
+import { getEffectiveCompanyInfo } from '@/lib/storage';
 import { normalizeOptionalText, normalizeText } from '@/lib/text';
 import type { FinancialTransaction, CompanyInfo } from '@/types';
 
@@ -74,7 +74,7 @@ export function PrintReceiptDialog({ isOpen, onOpenChange, transaction }: PrintR
       return;
     }
 
-    const companyInfo = normalizeText(await getCompanyInfo());
+    const companyInfo = normalizeText(await getEffectiveCompanyInfo());
     const normalizedTransaction = normalizeText(transaction);
 
     if (printType === 'a4') {

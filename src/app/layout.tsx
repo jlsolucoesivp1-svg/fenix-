@@ -5,8 +5,8 @@ import { Toaster } from '@/components/ui/toaster';
 import { ThemeProvider } from '@/components/theme-provider';
 
 export const metadata = {
-  title: 'Sistema Fenix',
-  description: 'Painel administrativo do Sistema Fenix para assistencias tecnicas',
+  title: 'Sistema Fênix',
+  description: 'Painel administrativo do Sistema Fênix para assistências técnicas',
 };
 
 export default function RootLayout({
@@ -17,6 +17,7 @@ export default function RootLayout({
   return (
     <html lang="pt-BR" suppressHydrationWarning>
       <head>
+        <meta charSet="utf-8" />
         <link rel="preconnect" href="https://fonts.googleapis.com" />
         <link rel="preconnect" href="https://fonts.gstatic.com" crossOrigin="anonymous" />
         <link

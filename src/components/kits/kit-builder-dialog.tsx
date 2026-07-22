@@ -1,4 +1,3 @@
-
 'use client';
 
 import * as React from 'react';
@@ -23,11 +22,10 @@ import {
   TableRow,
 } from '@/components/ui/table';
 import { Popover, PopoverContent, PopoverTrigger } from '@/components/ui/popover';
-import { Command, CommandEmpty, CommandGroup, CommandInput, CommandItem, CommandList } from '@/components/ui/command';
 import { useToast } from '@/hooks/use-toast';
 import type { Kit, KitItem, StockItem } from '@/types';
-import { PlusCircle, Trash2, ChevronsUpDown, Check } from 'lucide-react';
-import { cn } from '@/lib/utils';
+import { Trash2, ChevronsUpDown } from 'lucide-react';
+import { LocalAutocomplete, highlightMatch } from '@/components/ui/local-autocomplete';
 
 interface KitBuilderDialogProps {
   isOpen: boolean;
@@ -36,7 +34,6 @@ interface KitBuilderDialogProps {
   stockItems: StockItem[];
   onSave: (kit: Kit) => void;
 }
-
 export function KitBuilderDialog({ isOpen, onOpenChange, kit, stockItems, onSave }: KitBuilderDialogProps) {
   const { toast } = useToast();
   const [kitName, setKitName] = React.useState('');
@@ -133,29 +130,28 @@ export function KitBuilderDialog({ isOpen, onOpenChange, kit, stockItems, onSave
                   </Button>
                 </PopoverTrigger>
                 <PopoverContent className="w-[--radix-popover-trigger-width] p-0">
-                  <Command>
-                    <CommandInput placeholder="Buscar produto..." />
-                    <CommandList>
-                      <CommandEmpty>Nenhum produto encontrado.</CommandEmpty>
-                      <CommandGroup>
-                        {stockItems.map((item) => (
-                          <CommandItem
-                            key={item.id}
-                            value={item.name}
-                            onSelect={() => handleAddItem(item)}
-                          >
-                            <Check
-                              className={cn(
-                                'mr-2 h-4 w-4',
-                                kitItems.some(i => i.productId === item.id) ? 'opacity-100' : 'opacity-0'
-                              )}
-                            />
-                            {item.name}
-                          </CommandItem>
-                        ))}
-                      </CommandGroup>
-                    </CommandList>
-                  </Command>
+                  <div className="p-2">
+                    <LocalAutocomplete
+                      items={stockItems}
+                      selectedItem={null}
+                      onSelect={(item) => {
+                        if (item) {
+                          handleAddItem(item);
+                        }
+                      }}
+                      getOption={(item) => ({
+                        item,
+                        value: item.name,
+                        keywords: [item.category || '', item.barcode || ''],
+                      })}
+                      renderItem={(item, query) => (
+                        <span className="block truncate">{highlightMatch(item.name, query)}</span>
+                      )}
+                      placeholder="Buscar produto..."
+                      emptyMessage="Nenhum produto encontrado."
+                      inputClassName="border-0 shadow-none focus-visible:ring-0"
+                    />
+                  </div>
                 </PopoverContent>
               </Popover>
             </div>

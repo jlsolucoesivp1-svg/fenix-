@@ -19,23 +19,34 @@ interface AddStockEntryDialogProps {
   item: StockItem | null;
   isOpen: boolean;
   onOpenChange: (isOpen: boolean) => void;
-  onSave: (itemId: string, quantity: number, cost: number) => void;
+  onSave: (itemId: string, quantity: number, cost: number, entryId: string) => Promise<void>;
 }
 
 export function AddStockEntryDialog({ item, isOpen, onOpenChange, onSave }: AddStockEntryDialogProps) {
   const [quantity, setQuantity] = React.useState(1);
   const [cost, setCost] = React.useState(0);
+  const [isSaving, setIsSaving] = React.useState(false);
+  const [entryId, setEntryId] = React.useState('');
 
   React.useEffect(() => {
     if (isOpen && item) {
       setQuantity(1);
       setCost(item.costPrice || 0);
+      setIsSaving(false);
+      setEntryId(`STOCK-ENTRY-${item.id}-${Date.now()}`);
     }
   }, [isOpen, item]);
 
-  const handleSave = () => {
-    if (item) {
-      onSave(item.id, quantity, cost);
+  const handleSave = async () => {
+    if (!item || isSaving) {
+      return;
+    }
+
+    setIsSaving(true);
+    try {
+      await onSave(item.id, quantity, cost, entryId);
+    } finally {
+      setIsSaving(false);
     }
   };
 
@@ -61,8 +72,10 @@ export function AddStockEntryDialog({ item, isOpen, onOpenChange, onSave }: AddS
           </div>
         </div>
         <DialogFooter>
-          <Button variant="ghost" onClick={() => onOpenChange(false)}>Cancelar</Button>
-          <Button onClick={handleSave}>Salvar Entrada</Button>
+          <Button variant="ghost" onClick={() => onOpenChange(false)} disabled={isSaving}>Cancelar</Button>
+          <Button onClick={handleSave} disabled={isSaving || quantity <= 0 || cost < 0}>
+            {isSaving ? 'Salvando...' : 'Salvar Entrada'}
+          </Button>
         </DialogFooter>
       </DialogContent>
     </Dialog>

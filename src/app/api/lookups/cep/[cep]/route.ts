@@ -1,4 +1,5 @@
 import { NextResponse } from 'next/server';
+import { requireAuthenticatedUser } from '@/lib/server/authz';
 
 type ViaCepResponse = {
   cep?: string;
@@ -26,6 +27,9 @@ const buildAddress = (payload: ViaCepResponse) => {
 
 export async function GET(_: Request, context: { params: Promise<{ cep: string }> }) {
   try {
+    const authResult = await requireAuthenticatedUser();
+    if (authResult instanceof NextResponse) return authResult;
+
     const { cep } = await context.params;
     const normalizedCep = onlyDigits(cep);
 

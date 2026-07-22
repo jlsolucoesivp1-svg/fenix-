@@ -5,7 +5,7 @@ import * as React from 'react';
 import Image from 'next/image';
 import { Wrench } from 'lucide-react';
 import { cn } from '@/lib/utils';
-import { getCompanyInfo } from '@/lib/storage';
+import { getEffectiveCompanyInfo } from '@/lib/storage';
 import type { CompanyInfo } from '@/types';
 import { useSidebar } from '@/components/ui/sidebar';
 
@@ -20,7 +20,7 @@ const useCompanyInfo = () => {
   React.useEffect(() => {
     const fetchCompanyInfo = async () => {
         try {
-          const info = await getCompanyInfo();
+          const info = await getEffectiveCompanyInfo();
           setCompanyInfo(info);
         } catch {
           setCompanyInfo(null);

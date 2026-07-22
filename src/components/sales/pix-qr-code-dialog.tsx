@@ -1,4 +1,3 @@
-
 'use client';
 
 import * as React from 'react';
@@ -8,69 +7,22 @@ import {
   Dialog,
   DialogContent,
   DialogDescription,
+  DialogFooter,
   DialogHeader,
   DialogTitle,
-  DialogFooter,
 } from '@/components/ui/dialog';
 import { useToast } from '@/hooks/use-toast';
-import QRCode from 'qrcode';
 import type { CompanyInfo } from '@/types';
-import { Copy, Check } from 'lucide-react';
+import { Check, Copy, Landmark, QrCode, ReceiptText } from 'lucide-react';
+import { buildPixTxid, createPixPaymentData, extractCityFromAddress } from '@/lib/pix';
 
 interface PixQrCodeDialogProps {
   isOpen: boolean;
   onOpenChange: (isOpen: boolean) => void;
   companyInfo: CompanyInfo | null;
-  sale: { total: number, id: string };
+  sale: { total: number; id: string };
   onConfirm: (printReceipt: boolean) => void;
 }
-
-const generatePixPayload = (
-    pixKey: string,
-    merchantName: string,
-    merchantCity: string,
-    amount: number,
-    txid: string,
-  ): string => {
-    
-    const formatField = (id: string, value: string): string => {
-        const len = value.length.toString().padStart(2, '0');
-        return `${id}${len}${value}`;
-    };
-
-    const merchantNameFormatted = (merchantName || 'Empresa').normalize("NFD").replace(/[\u0300-\u036f]/g, "").substring(0, 25);
-    const merchantCityFormatted = (merchantCity || 'SAO PAULO').normalize("NFD").replace(/[\u0300-\u036f]/g, "").substring(0, 15);
-
-    const payload = [
-        formatField('00', '01'),
-        formatField('26', `${formatField('00', 'br.gov.bcb.pix')}${formatField('01', pixKey)}`),
-        formatField('52', '0000'),
-        formatField('53', '986'),
-        formatField('54', amount.toFixed(2)),
-        formatField('58', 'BR'),
-        formatField('59', merchantNameFormatted),
-        formatField('60', merchantCityFormatted),
-        formatField('62', formatField('05', txid)),
-    ].join('');
-    
-    const payloadWithCrc = `${payload}6304`;
-    
-    let crc = 0xFFFF;
-    for (let i = 0; i < payloadWithCrc.length; i++) {
-        crc ^= (payloadWithCrc.charCodeAt(i) << 8);
-        for (let j = 0; j < 8; j++) {
-            if ((crc & 0x8000) !== 0) {
-                crc = (crc << 1) ^ 0x1021;
-            } else {
-                crc <<= 1;
-            }
-        }
-    }
-    const crc16 = (crc & 0xFFFF).toString(16).toUpperCase().padStart(4, '0');
-
-    return `${payloadWithCrc}${crc16}`;
-};
-
 
 export function PixQrCodeDialog({
   isOpen,
@@ -85,85 +37,176 @@ export function PixQrCodeDialog({
   const [hasCopied, setHasCopied] = React.useState(false);
 
   React.useEffect(() => {
-    // Only generate QR code when dialog opens and all data is available
     if (isOpen && companyInfo?.pixKey && sale.total > 0 && sale.id) {
       try {
-        const pixPayload = generatePixPayload(
-          companyInfo.pixKey,
-          companyInfo.name,
-          'SAO PAULO',
-          sale.total,
-          '***'
-        );
+        const pixPaymentData = createPixPaymentData({
+          pixKey: companyInfo.pixKey,
+          merchantName: companyInfo.name,
+          merchantCity: extractCityFromAddress(companyInfo.address),
+          amount: sale.total,
+          txid: buildPixTxid(`SALE${sale.id.slice(-12)}`),
+          description: `VENDA ${sale.id.slice(-6)}`,
+          qrCodeWidth: 240,
+        });
 
-        setPixCopyPaste(pixPayload);
+        setPixCopyPaste(pixPaymentData.payload);
 
-        QRCode.toDataURL(pixPayload, { width: 200, margin: 1, errorCorrectionLevel: 'M' })
-          .then(url => {
+        pixPaymentData.qrCodeDataUrlPromise
+          .then((url) => {
             setQrCodeDataUrl(url);
           })
-          .catch(err => {
+          .catch((err) => {
             console.error(err);
             toast({
               variant: 'destructive',
               title: 'Erro ao gerar QR Code',
-              description: 'Não foi possível criar a imagem do QR Code.',
+              description: 'Nao foi possivel criar a imagem do QR Code.',
             });
           });
       } catch (error) {
-        console.error("PIX Payload Error:", error);
+        console.error('PIX Payload Error:', error);
         toast({
-            variant: 'destructive',
-            title: 'Erro de Dados PIX',
-            description: 'Verifique se a chave PIX e nome da empresa estão corretos nas configurações.',
+          variant: 'destructive',
+          title: 'Erro de dados PIX',
+          description: 'Verifique a chave PIX e o cadastro da empresa nas configuracoes.',
         });
       }
     } else if (!isOpen) {
-      // Clear data when dialog closes
       setQrCodeDataUrl('');
       setPixCopyPaste('');
+      setHasCopied(false);
     }
   }, [isOpen, companyInfo, sale.id, sale.total, toast]);
-  
+
   const handleCopyToClipboard = () => {
+    if (!pixCopyPaste) {
+      return;
+    }
+
     navigator.clipboard.writeText(pixCopyPaste);
     setHasCopied(true);
-    toast({ title: "Copiado!", description: "O código PIX Copia e Cola foi copiado para a área de transferência." });
+    toast({
+      title: 'Codigo copiado',
+      description: 'O codigo PIX copia e cola foi enviado para a area de transferencia.',
+    });
     setTimeout(() => setHasCopied(false), 2000);
   };
 
   return (
     <Dialog open={isOpen} onOpenChange={onOpenChange}>
-      <DialogContent className="sm:max-w-md">
-        <DialogHeader>
-          <DialogTitle>Pagamento via PIX</DialogTitle>
-          <DialogDescription>
-            Aponte a câmera do seu celular para o QR Code ou use o Copia e Cola.
-          </DialogDescription>
-        </DialogHeader>
-        <div className="py-4 space-y-4 text-center">
-            {qrCodeDataUrl ? (
-                <div className="flex justify-center">
-                    <Image src={qrCodeDataUrl} alt="PIX QR Code" width={200} height={200} />
+      <DialogContent className="overflow-hidden border-0 bg-transparent p-0 shadow-none sm:max-w-2xl">
+        <div className="overflow-hidden rounded-3xl border border-slate-200 bg-white shadow-2xl">
+          <DialogHeader className="border-b border-slate-200 bg-gradient-to-r from-slate-950 via-slate-900 to-emerald-900 px-6 py-6 text-left text-white">
+            <div className="flex items-start justify-between gap-4">
+              <div className="space-y-2">
+                <div className="inline-flex items-center gap-2 rounded-full border border-white/15 bg-white/10 px-3 py-1 text-xs font-medium uppercase tracking-[0.2em] text-emerald-100">
+                  <Landmark className="h-3.5 w-3.5" />
+                  PIX
                 </div>
-            ) : (
-                 <div className="h-[200px] w-[200px] bg-muted animate-pulse rounded-md mx-auto flex items-center justify-center">
-                    <p className="text-muted-foreground">Gerando QR Code...</p>
-                </div>
-            )}
-            <div className="text-center">
-                <p className="text-base">Total a Pagar</p>
-                <p className="text-3xl font-bold text-primary">R$ {sale.total.toFixed(2)}</p>
+                <DialogTitle className="text-2xl font-semibold tracking-tight">Pagamento via PIX</DialogTitle>
+                <DialogDescription className="max-w-xl text-sm leading-6 text-slate-200">
+                  Confira os dados abaixo, escaneie o QR Code ou use o codigo copia e cola para concluir o pagamento.
+                </DialogDescription>
+              </div>
+              <div className="hidden rounded-2xl border border-white/15 bg-white/10 p-3 text-white/80 md:block">
+                <QrCode className="h-8 w-8" />
+              </div>
             </div>
-             <Button variant="outline" onClick={handleCopyToClipboard}>
-                {hasCopied ? <Check className="mr-2 h-4 w-4 text-green-500" /> : <Copy className="mr-2 h-4 w-4" />}
-                {hasCopied ? 'Copiado!' : 'PIX Copia e Cola'}
+          </DialogHeader>
+
+          <div className="grid gap-6 bg-slate-50 px-6 py-6 md:grid-cols-[260px_minmax(0,1fr)]">
+            <div className="rounded-3xl border border-slate-200 bg-white p-5 shadow-sm">
+              <div className="mb-4 flex items-center gap-2 text-sm font-medium text-slate-500">
+                <QrCode className="h-4 w-4" />
+                QR Code de pagamento
+              </div>
+
+              {qrCodeDataUrl ? (
+                <div className="overflow-hidden rounded-2xl border border-slate-200 bg-white p-3">
+                  <Image src={qrCodeDataUrl} alt="PIX QR Code" width={240} height={240} className="mx-auto h-auto w-full" />
+                </div>
+              ) : (
+                <div className="flex aspect-square items-center justify-center rounded-2xl border border-dashed border-slate-300 bg-slate-100 p-4 text-center">
+                  <p className="text-sm text-slate-500">Gerando QR Code...</p>
+                </div>
+              )}
+
+              <p className="mt-4 text-center text-xs leading-5 text-slate-500">
+                Use a camera do celular ou o app do banco para ler o codigo.
+              </p>
+            </div>
+
+            <div className="space-y-4">
+              <div className="rounded-3xl border border-emerald-200 bg-gradient-to-br from-emerald-50 via-white to-white p-5 shadow-sm">
+                <div className="mb-3 flex items-center gap-2 text-sm font-medium text-emerald-700">
+                  <ReceiptText className="h-4 w-4" />
+                  Resumo da cobranca
+                </div>
+                <div className="grid gap-4 sm:grid-cols-2">
+                  <div className="rounded-2xl border border-white/70 bg-white/80 p-4">
+                    <p className="text-xs uppercase tracking-[0.16em] text-slate-500">Total a pagar</p>
+                    <p className="mt-2 text-3xl font-bold tracking-tight text-emerald-700">
+                      {sale.total.toLocaleString('pt-BR', { style: 'currency', currency: 'BRL' })}
+                    </p>
+                  </div>
+                  <div className="rounded-2xl border border-white/70 bg-white/80 p-4">
+                    <p className="text-xs uppercase tracking-[0.16em] text-slate-500">Referencia</p>
+                    <p className="mt-2 text-lg font-semibold text-slate-900">Venda #{sale.id.slice(-6)}</p>
+                    <p className="mt-1 text-sm text-slate-500">{companyInfo?.name || 'Empresa nao informada'}</p>
+                  </div>
+                </div>
+              </div>
+
+              <div className="rounded-3xl border border-slate-200 bg-white p-5 shadow-sm">
+                <div className="mb-3 flex items-center gap-2 text-sm font-medium text-slate-600">
+                  <Landmark className="h-4 w-4" />
+                  Dados para pagamento
+                </div>
+                <div className="grid gap-4">
+                  <div className="rounded-2xl border border-slate-200 bg-slate-50 p-4">
+                    <p className="text-xs uppercase tracking-[0.16em] text-slate-500">Chave PIX</p>
+                    <p className="mt-2 break-all text-sm font-medium text-slate-900">
+                      {companyInfo?.pixKey || 'Nao configurada'}
+                    </p>
+                  </div>
+
+                  <div className="rounded-2xl border border-slate-200 bg-slate-50 p-4">
+                    <p className="text-xs uppercase tracking-[0.16em] text-slate-500">Codigo copia e cola</p>
+                    <p className="mt-2 max-h-24 overflow-auto break-all font-mono text-xs leading-5 text-slate-700">
+                      {pixCopyPaste || 'Gerando codigo PIX...'}
+                    </p>
+                  </div>
+
+                  <Button
+                    variant="outline"
+                    onClick={handleCopyToClipboard}
+                    disabled={!pixCopyPaste}
+                    className="h-11 rounded-xl border-slate-300 bg-white text-slate-900 hover:bg-slate-100"
+                  >
+                    {hasCopied ? <Check className="mr-2 h-4 w-4 text-green-600" /> : <Copy className="mr-2 h-4 w-4" />}
+                    {hasCopied ? 'Codigo copiado' : 'Copiar codigo PIX'}
+                  </Button>
+                </div>
+              </div>
+
+              <div className="rounded-3xl border border-slate-200 bg-white p-5 text-sm leading-6 text-slate-600 shadow-sm">
+                <p className="font-medium text-slate-900">Como usar</p>
+                <p className="mt-2">
+                  1. Abra o app do banco. 2. Escolha pagar com PIX. 3. Escaneie o QR Code ou cole o codigo acima.
+                </p>
+              </div>
+            </div>
+          </div>
+
+          <DialogFooter className="border-t border-slate-200 bg-white px-6 py-4 sm:justify-between">
+            <Button variant="secondary" onClick={() => onConfirm(true)} className="rounded-xl">
+              Confirmar e Imprimir Recibo
             </Button>
+            <Button onClick={() => onConfirm(false)} className="rounded-xl bg-emerald-600 text-white hover:bg-emerald-700">
+              Confirmar Pagamento
+            </Button>
+          </DialogFooter>
         </div>
-        <DialogFooter className="flex-col sm:flex-row sm:justify-between gap-2">
-          <Button variant="secondary" onClick={() => onConfirm(true)}>Confirmar e Imprimir Recibo</Button>
-          <Button onClick={() => onConfirm(false)}>Confirmar Pagamento</Button>
-        </DialogFooter>
       </DialogContent>
     </Dialog>
   );

@@ -1,4 +1,5 @@
 import { NextResponse } from 'next/server';
+import { requireAuthenticatedUser } from '@/lib/server/authz';
 
 type BrasilApiCnpjResponse = {
   cnpj?: string;
@@ -113,6 +114,9 @@ const lookupCnpjWs = async (cnpj: string) => {
 
 export async function GET(_: Request, context: { params: Promise<{ cnpj: string }> }) {
   try {
+    const authResult = await requireAuthenticatedUser();
+    if (authResult instanceof NextResponse) return authResult;
+
     const { cnpj } = await context.params;
     const normalizedCnpj = onlyDigits(cnpj);
 

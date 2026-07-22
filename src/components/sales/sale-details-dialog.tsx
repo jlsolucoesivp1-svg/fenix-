@@ -13,10 +13,10 @@ import { Button } from '@/components/ui/button';
 import { ScrollArea } from '@/components/ui/scroll-area';
 import { Separator } from '@/components/ui/separator';
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@/components/ui/table';
-import { User, Calendar, Clock, Printer, ShoppingCart, DollarSign, StickyNote } from 'lucide-react';
-import type { Sale } from '@/types';
+import { User, Calendar, Clock, Printer, ShoppingCart, DollarSign, StickyNote, Phone, Mail, MapPin, FileBadge } from 'lucide-react';
+import type { Customer, Sale } from '@/types';
 import { useToast } from '@/hooks/use-toast';
-import { getCompanyInfo } from '@/lib/storage';
+import { getEffectiveCompanyInfo, getEffectiveCustomers } from '@/lib/storage';
 import { normalizeOptionalText, normalizeText } from '@/lib/text';
 import jsPDF from 'jspdf';
 import 'jspdf-autotable';
@@ -45,22 +45,99 @@ const InfoItem = ({ icon: Icon, label, value }: { icon: React.ElementType; label
     <Icon className="h-5 w-5 text-muted-foreground" />
     <div>
       <p className="text-sm text-muted-foreground">{label}</p>
-      <p className="font-semibold">{value || 'Não informado'}</p>
+      <p className="font-semibold">{value || 'NÃ£o informado'}</p>
     </div>
   </div>
 );
 
+const resolveSaleCustomer = (sale: Sale, customers: Customer[]): Customer | null => {
+  if (sale.customerId) {
+    const customerById = customers.find((customer) => customer.id === sale.customerId);
+    if (customerById) {
+      return customerById;
+    }
+  }
+
+  if (sale.customerName) {
+    const normalizedCustomerName = sale.customerName.trim().toLowerCase();
+    return customers.find((customer) => customer.name.trim().toLowerCase() === normalizedCustomerName) || null;
+  }
+
+  return null;
+};
+
+const getSaleCustomerRows = (sale: Sale, customer: Customer | null) => {
+  const rows: Array<[string, string]> = [];
+  const customerName = sale.customerName || customer?.name;
+
+  if (customerName) {
+    rows.push(['Cliente', customerName]);
+  }
+  if (customer?.document) {
+    rows.push(['CPF/CNPJ', customer.document]);
+  }
+  if (customer?.phone) {
+    rows.push(['Telefone', customer.phone]);
+  }
+  if (customer?.email) {
+    rows.push(['E-mail', customer.email]);
+  }
+  if (customer?.address) {
+    rows.push(['Endereco', customer.address]);
+  }
+
+  return rows;
+};
+
 export function SaleDetailsDialog({ isOpen, onOpenChange, sale }: SaleDetailsDialogProps) {
   const { toast } = useToast();
+  const [customer, setCustomer] = React.useState<Customer | null>(null);
+
+  React.useEffect(() => {
+    let isMounted = true;
+
+    const loadCustomer = async () => {
+      if (!isOpen || !sale) {
+        setCustomer(null);
+        return;
+      }
+
+      try {
+        const loadedCustomers = normalizeText(await getEffectiveCustomers());
+        if (!isMounted) {
+          return;
+        }
+
+        setCustomer(resolveSaleCustomer(normalizeText(sale), loadedCustomers));
+      } catch (error) {
+        console.error(error);
+        if (isMounted) {
+          setCustomer(null);
+        }
+      }
+    };
+
+    loadCustomer();
+
+    return () => {
+      isMounted = false;
+    };
+  }, [isOpen, sale]);
 
   const handlePrint = async () => {
     if (!sale) {
-      toast({ variant: 'destructive', title: 'Erro', description: 'Não há dados da venda para imprimir.' });
+      toast({ variant: 'destructive', title: 'Erro', description: 'NÃ£o hÃ¡ dados da venda para imprimir.' });
       return;
     }
 
-    const companyInfo = normalizeText(await getCompanyInfo());
+    const [loadedCompanyInfo, loadedCustomers] = await Promise.all([
+      getEffectiveCompanyInfo(),
+      getEffectiveCustomers(),
+    ]);
+    const companyInfo = normalizeText(loadedCompanyInfo);
     const normalizedSale = normalizeText(sale);
+    const activeCustomer = customer || resolveSaleCustomer(normalizedSale, normalizeText(loadedCustomers));
+    const customerRows = getSaleCustomerRows(normalizedSale, activeCustomer);
 
     const generateContent = (logoImage: HTMLImageElement | null = null) => {
       const doc = new jsPDF();
@@ -105,6 +182,19 @@ export function SaleDetailsDialog({ isOpen, onOpenChange, sale }: SaleDetailsDia
 
       currentY = 50;
 
+      if (customerRows.length > 0) {
+        doc.autoTable({
+          startY: currentY,
+          head: [['Dados do Cliente', 'Informacao']],
+          body: customerRows,
+          theme: 'grid',
+          styles: { fontSize: 9, cellPadding: 2, lineColor: [220, 220, 220] },
+          headStyles: { fillColor: '#0F172A', textColor: '#FFFFFF', fontStyle: 'bold' },
+          columnStyles: { 0: { cellWidth: 30, fontStyle: 'bold' } },
+        });
+        currentY = doc.lastAutoTable.finalY + 8;
+      }
+
       doc.autoTable({
         startY: currentY,
         head: [['Vendedor', 'Forma de Pagamento']],
@@ -116,7 +206,7 @@ export function SaleDetailsDialog({ isOpen, onOpenChange, sale }: SaleDetailsDia
 
       doc.autoTable({
         startY: currentY,
-        head: [['Produto', 'Qtd.', 'Preço Unit.', 'Subtotal']],
+        head: [['Produto', 'Qtd.', 'PreÃ§o Unit.', 'Subtotal']],
         body: normalizedSale.items.map((item) => [
           item.name,
           item.quantity,
@@ -137,7 +227,7 @@ export function SaleDetailsDialog({ isOpen, onOpenChange, sale }: SaleDetailsDia
       if (normalizedSale.observations) {
         doc.setFontSize(10);
         doc.setFont('helvetica', 'bold');
-        doc.text('Observações:', margin, currentY);
+        doc.text('ObservaÃ§Ãµes:', margin, currentY);
         currentY += 5;
         doc.setFontSize(9);
         doc.setFont('helvetica', 'normal');
@@ -167,20 +257,23 @@ export function SaleDetailsDialog({ isOpen, onOpenChange, sale }: SaleDetailsDia
     return null;
   }
 
+  const customerName = sale.customerName || customer?.name;
+  const customerInfoRows = getSaleCustomerRows(sale, customer);
+
   return (
     <Dialog open={isOpen} onOpenChange={onOpenChange}>
-      <DialogContent className="sm:max-w-3xl h-[80vh] flex flex-col">
+      <DialogContent className="flex h-[80dvh] flex-col overflow-hidden sm:max-w-3xl">
         <DialogHeader>
           <DialogTitle>Detalhes da Venda #{sale.id.slice(-6)}</DialogTitle>
-          <DialogDescription>Informações completas sobre a transação realizada.</DialogDescription>
+          <DialogDescription>InformaÃ§Ãµes completas sobre a transaÃ§Ã£o realizada.</DialogDescription>
         </DialogHeader>
 
         <div className="flex-grow min-h-0">
-          <ScrollArea className="h-full pr-6">
+          <ScrollArea className="h-full pr-2 sm:pr-6">
             <div className="space-y-6">
               <div className="p-4 border rounded-lg">
-                <h3 className="font-semibold mb-4">Informações Gerais</h3>
-                <div className="grid grid-cols-2 md:grid-cols-3 gap-y-4 gap-x-2">
+                <h3 className="font-semibold mb-4">InformaÃ§Ãµes Gerais</h3>
+                <div className="grid grid-cols-1 gap-x-2 gap-y-4 sm:grid-cols-2 md:grid-cols-3">
                   <InfoItem icon={User} label="Vendido por" value={sale.user} />
                   <InfoItem icon={Calendar} label="Data" value={formatDate(sale.date)} />
                   <InfoItem icon={Clock} label="Hora" value={sale.time} />
@@ -188,17 +281,30 @@ export function SaleDetailsDialog({ isOpen, onOpenChange, sale }: SaleDetailsDia
                 </div>
               </div>
 
+              {customerInfoRows.length > 0 && (
+                <div className="p-4 border rounded-lg">
+                  <h3 className="font-semibold mb-4">Dados do Cliente</h3>
+                  <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3 gap-y-4 gap-x-2">
+                    <InfoItem icon={User} label="Cliente" value={customerName} />
+                    <InfoItem icon={FileBadge} label="CPF/CNPJ" value={customer?.document} />
+                    <InfoItem icon={Phone} label="Telefone" value={customer?.phone} />
+                    <InfoItem icon={Mail} label="E-mail" value={customer?.email} />
+                    <InfoItem icon={MapPin} label="EndereÃ§o" value={customer?.address} />
+                  </div>
+                </div>
+              )}
+
               <div>
                 <h3 className="font-semibold mb-2 flex items-center gap-2">
                   <ShoppingCart className="h-5 w-5" /> Itens Vendidos
                 </h3>
-                <div className="border rounded-lg">
+                <div className="overflow-x-auto rounded-lg border">
                   <Table>
                     <TableHeader>
                       <TableRow>
                         <TableHead>Produto</TableHead>
                         <TableHead className="text-center">Qtd.</TableHead>
-                        <TableHead className="text-right">Preço Unit.</TableHead>
+                        <TableHead className="text-right">PreÃ§o Unit.</TableHead>
                         <TableHead className="text-right">Subtotal</TableHead>
                       </TableRow>
                     </TableHeader>
@@ -238,7 +344,7 @@ export function SaleDetailsDialog({ isOpen, onOpenChange, sale }: SaleDetailsDia
               {sale.observations && (
                 <div className="p-4 border rounded-lg">
                   <h3 className="font-semibold mb-2 flex items-center gap-2">
-                    <StickyNote className="h-5 w-5" /> Observações
+                    <StickyNote className="h-5 w-5" /> ObservaÃ§Ãµes
                   </h3>
                   <p className="text-sm text-muted-foreground whitespace-pre-wrap">{sale.observations}</p>
                 </div>

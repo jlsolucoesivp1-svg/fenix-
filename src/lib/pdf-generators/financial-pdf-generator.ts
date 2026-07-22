@@ -1,5 +1,5 @@
 import type { FinancialTransaction } from '@/types';
-import { getCompanyInfo } from '@/lib/storage';
+import { getEffectiveCompanyInfo } from '@/lib/storage';
 import { normalizeOptionalText, normalizeText } from '@/lib/text';
 import { format } from 'date-fns';
 import { jsPDF } from 'jspdf';
@@ -57,7 +57,7 @@ export const generateFinancialReportPdf = async (
   dateRange: { from?: Date; to?: Date } | undefined,
   totals: { receitas: number; despesas: number; saldo: number }
 ) => {
-  const companyInfo = normalizeText(await getCompanyInfo());
+  const companyInfo = normalizeText(await getEffectiveCompanyInfo());
   const normalizedTransactions = normalizeText(filteredTransactions);
   const logoDataUrl = await loadImageAsDataUrl(companyInfo.logoUrl);
 

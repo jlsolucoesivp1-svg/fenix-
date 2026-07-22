@@ -3,9 +3,7 @@
 
 import * as React from 'react';
 import { ShoppingCart, Trash2, ScanLine, FileText, Calendar as CalendarIcon, FileSignature, UserPlus } from 'lucide-react';
-import { addDays, addMonths, format } from 'date-fns';
-import { DateRange } from "react-day-picker";
-import { ptBR } from 'date-fns/locale';
+import { addMonths, format } from 'date-fns';
 
 import { Button } from '@/components/ui/button';
 import { Card, CardContent, CardDescription, CardHeader, CardTitle, CardFooter } from '@/components/ui/card';
@@ -35,27 +33,44 @@ import {
   DialogHeader,
   DialogTitle,
   DialogFooter,
-  DialogTrigger,
   DialogDescription
 } from '@/components/ui/dialog';
 
-import { getStock, getSales, saveStock, getFinancialTransactions, saveFinancialTransactions, getCompanyInfo, saveSales, getCustomers, saveCustomers } from '@/lib/storage';
+import {
+  createTenantCustomer,
+  finalizarVenda,
+  getCustomers,
+  getFinancialTransactions,
+  getSales,
+  getStock,
+  listTenantCustomers,
+  listTenantProducts,
+  saveCustomers,
+  saveFinancialTransactions,
+  saveSales,
+  saveStock,
+} from '@/lib/storage';
 import { useCurrentUser } from '@/hooks/use-current-user';
-import type { Sale, FinancialTransaction, User, CompanyInfo, SaleItem, Customer } from '@/types';
+import type { Sale, FinancialTransaction, SaleItem, Customer, StockItem } from '@/types';
 import { useToast } from '@/hooks/use-toast';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
 import { Textarea } from '@/components/ui/textarea';
 import { ChangeCalculatorDialog } from '@/components/sales/change-calculator-dialog';
 import { SaleInvoiceDialog } from '@/components/sales/sale-invoice-dialog';
-import { PixQrCodeDialog } from '@/components/sales/pix-qr-code-dialog';
 import { ManualAddItemDialog } from '@/components/sales/manual-add-item-dialog';
+import { CustomerAutocomplete } from '@/components/customers/customer-autocomplete';
 import { Popover, PopoverContent, PopoverTrigger } from '@/components/ui/popover';
 import { Calendar } from '@/components/ui/calendar';
+import { useCurrentAppSession } from '@/hooks/use-current-app-session';
 import { cn } from '@/lib/utils';
+import { getPosPaymentMethodLabel, POS_PAYMENT_METHOD_OPTIONS } from '@/lib/payment-methods';
+import { searchTenantCustomers } from '@/lib/storage';
+import { ModuleLoadingState } from '@/components/ui/module-state';
 
 export default function VendasPage() {
   const { toast } = useToast();
   const { user: currentUser } = useCurrentUser();
+  const session = useCurrentAppSession();
   const [saleItems, setSaleItems] = React.useState<SaleItem[]>([]);
   const [discount, setDiscount] = React.useState(0);
   const [paymentMethod, setPaymentMethod] = React.useState('dinheiro');
@@ -64,13 +79,10 @@ export default function VendasPage() {
   const [isManualAddOpen, setIsManualAddOpen] = React.useState(false);
   const [isChangeCalcOpen, setIsChangeCalcOpen] = React.useState(false);
   const barcodeInputRef = React.useRef<HTMLInputElement>(null);
-  const [companyInfoForDialog, setCompanyInfoForDialog] = React.useState<CompanyInfo | null>(null);
   
   const [isInvoiceDialogOpen, setIsInvoiceDialogOpen] = React.useState(false);
   const [saleToPrint, setSaleToPrint] = React.useState<Sale | null>(null);
-  const [isPixDialogOpen, setIsPixDialogOpen] = React.useState(false);
   const [isCreditSaleDialogOpen, setIsCreditSaleDialogOpen] = React.useState(false);
-  const [currentSaleId, setCurrentSaleId] = React.useState('');
   
   const [stock, setStock] = React.useState<StockItem[]>([]);
   const [customers, setCustomers] = React.useState<Customer[]>([]);
@@ -83,17 +95,43 @@ export default function VendasPage() {
   const [isInstallments, setIsInstallments] = React.useState(false);
   const [installmentsCount, setInstallmentsCount] = React.useState(2);
   const [firstDueDate, setFirstDueDate] = React.useState<Date | undefined>(addMonths(new Date(), 1));
+  const useSaasSales =
+    session.authSource === 'supabase-only' && session.tenantAccess?.canAccessTenant === true;
 
 
   React.useEffect(() => {
+    if (session.isLoading) {
+      return;
+    }
+
+    let cancelled = false;
+
     const loadData = async () => {
-      const [stockData, customersData] = await Promise.all([getStock(), getCustomers()]);
-      setStock(stockData);
-      setCustomers(customersData);
+      try {
+        const [stockData, customersData] = await Promise.all(
+          useSaasSales ? [listTenantProducts(), listTenantCustomers()] : [getStock(), getCustomers()]
+        );
+        if (cancelled) return;
+
+        setStock(stockData);
+        setCustomers(customersData);
+      } catch (error) {
+        if (!cancelled) {
+          toast({
+            variant: 'destructive',
+            title: 'Erro ao carregar dados de vendas',
+            description: error instanceof Error ? error.message : 'Nao foi possivel carregar produtos e clientes.',
+          });
+        }
+      }
     };
-    loadData();
+    void loadData();
     barcodeInputRef.current?.focus();
-  }, []);
+
+    return () => {
+      cancelled = true;
+    };
+  }, [session.isLoading, toast, useSaasSales]);
 
   React.useEffect(() => {
     if (paymentMethod !== 'parcelado') {
@@ -208,9 +246,7 @@ export default function VendasPage() {
     setDiscount(0);
     setPaymentMethod('dinheiro');
     setObservations('');
-    setCurrentSaleId('');
     setSelectedCustomerId(undefined);
-    setCompanyInfoForDialog(null);
     setIsInstallments(false);
     setInstallmentsCount(2);
     setFirstDueDate(addMonths(new Date(), 1));
@@ -221,29 +257,50 @@ export default function VendasPage() {
     resetSale();
     toast({ title: 'Venda Cancelada', description: 'Todos os itens foram removidos do carrinho.' });
   };
+
+  const shouldUseLegacySaleFallback = (error: unknown) => {
+    if (!(error instanceof Error)) {
+      return false;
+    }
+
+    return (
+      error.message.includes('Falha na requisicao: 404') ||
+      error.message.includes('Falha na requisicao: 405') ||
+      error.message.includes('Failed to fetch') ||
+      error.message.includes('Modulo de vendas SaaS indisponivel')
+    );
+  };
   
     const handleSaveNewCustomer = async () => {
         if (!newCustomer.name) {
             toast({ variant: 'destructive', title: 'Nome obrigatório' });
             return;
         }
-        const customerToAdd: Customer = { ...newCustomer, id: `CUST-${Date.now()}` };
-        const updatedCustomers = [...customers, customerToAdd];
-        await saveCustomers(updatedCustomers);
-        setCustomers(updatedCustomers);
+        const customerToAdd: Customer = useSaasSales
+          ? await createTenantCustomer(newCustomer)
+          : { ...newCustomer, id: `CUST-${Date.now()}` };
+        if (useSaasSales) {
+          setCustomers((prev) => [...prev, customerToAdd].sort((a, b) => a.name.localeCompare(b.name)));
+        } else {
+          const updatedCustomers = [...customers, customerToAdd];
+          await saveCustomers(updatedCustomers);
+          setCustomers(updatedCustomers);
+        }
         setSelectedCustomerId(customerToAdd.id);
         setIsAddCustomerOpen(false);
         toast({ title: 'Cliente adicionado!', description: `${customerToAdd.name} foi salvo.` });
     };
 
-  const processSale = async (shouldPrint = false) => {
+  const processSaleLegacy = async (shouldPrint = false) => {
     if (saleItems.length === 0) {
         toast({ variant: 'destructive', title: 'Carrinho Vazio', description: 'Adicione produtos para finalizar a venda.' });
         return;
     }
     
-    const saleId = currentSaleId || `SALE-${Date.now()}`;
+    const saleId = `SALE-${Date.now()}`;
     const customer = customers.find(c => c.id === selectedCustomerId);
+    const paymentMethodLabel = getPosPaymentMethodLabel(paymentMethod);
+    const isPendingPayment = paymentMethod === 'boleto';
 
     // 1. Create Sale Record
     const newSale: Sale = {
@@ -255,9 +312,10 @@ export default function VendasPage() {
         subtotal: subtotal,
         discount: discount,
         total: finalTotal,
-        paymentMethod: paymentMethod,
+        paymentMethod: paymentMethodLabel,
         observations: observations,
         customerId: selectedCustomerId,
+        customerName: customer?.name,
     };
     const existingSales = await getSales();
     await saveSales([...existingSales, newSale]);
@@ -299,12 +357,12 @@ export default function VendasPage() {
             newTransactions.push({
                 id: `FIN-${Date.now()}-${i}`,
                 type: 'receita',
-                description: `${baseDesc} | Parcelamento: ${i + 1}/${installmentsCount} de R$ ${installmentAmount.toFixed(2)} | Pagamento: ${paymentMethod} | Valor Total: R$ ${finalTotal.toFixed(2)} | Vencimento: ${format(dueDate, 'dd/MM/yyyy')} | Data: ${saleDate}`,
+                description: `${baseDesc} | Parcelamento: ${i + 1}/${installmentsCount} de R$ ${installmentAmount.toFixed(2)} | Pagamento: ${paymentMethodLabel} | Valor Total: R$ ${finalTotal.toFixed(2)} | Vencimento: ${format(dueDate, 'dd/MM/yyyy')} | Data: ${saleDate}`,
                 amount: installmentAmount,
                 date: newSale.date,
                 dueDate: format(dueDate, 'yyyy-MM-dd'),
                 category: 'Venda de Produto',
-                paymentMethod: paymentMethod,
+                paymentMethod: paymentMethodLabel,
                 relatedSaleId: newSale.id,
                 status: 'pendente',
             });
@@ -313,24 +371,28 @@ export default function VendasPage() {
         newTransactions.push({
             id: `FIN-${Date.now()}`,
             type: 'receita',
-            description: `${baseDesc} | Pagamento: ${paymentMethod} | Valor Total: R$ ${finalTotal.toFixed(2)} | Data: ${saleDate}`,
+            description: `${baseDesc} | Pagamento: ${paymentMethodLabel} | Valor Total: R$ ${finalTotal.toFixed(2)} | Data: ${saleDate}`,
             amount: finalTotal,
             date: new Date().toISOString().split('T')[0],
             category: 'Venda de Produto',
-            paymentMethod: paymentMethod,
+            paymentMethod: paymentMethodLabel,
             relatedSaleId: newSale.id,
-            status: 'pago',
+            status: isPendingPayment ? 'pendente' : 'pago',
         });
     }
 
     await saveFinancialTransactions([...newTransactions, ...existingTransactions]);
 
     // 4. Notify and Reset
-    toast({ title: 'Venda Finalizada!', description: `Venda de R$ ${finalTotal.toLocaleString('pt-BR', { style: 'currency', currency: 'BRL' })} registrada com sucesso.` });
+    toast({
+      title: isPendingPayment ? 'Venda registrada com boleto!' : 'Venda Finalizada!',
+      description: isPendingPayment
+        ? `Venda registrada como pendente no financeiro via ${paymentMethodLabel}.`
+        : `Venda de R$ ${finalTotal.toLocaleString('pt-BR', { style: 'currency', currency: 'BRL' })} registrada com sucesso.`,
+    });
     
     // 5. Conditional dialogs
     setIsChangeCalcOpen(false);
-    setIsPixDialogOpen(false);
     setIsCreditSaleDialogOpen(false);
     
     if (shouldPrint) {
@@ -339,7 +401,69 @@ export default function VendasPage() {
     }
     
     resetSale();
-  }
+  };
+
+  const processSale = async (shouldPrint = false) => {
+    if (saleItems.length === 0) {
+      toast({ variant: 'destructive', title: 'Carrinho Vazio', description: 'Adicione produtos para finalizar a venda.' });
+      return;
+    }
+
+    const saleId = `SALE-${Date.now()}`;
+    const customer = customers.find(c => c.id === selectedCustomerId);
+
+    try {
+      const result = await finalizarVenda({
+        saleId,
+        items: saleItems,
+        discount,
+        paymentMethod,
+        observations,
+        customerId: selectedCustomerId,
+        customerName: customer?.name,
+        relatedQuoteId: undefined,
+        userName: currentUser?.name,
+        installments: {
+          enabled: isInstallments,
+          count: installmentsCount,
+          firstDueDate: firstDueDate ? format(firstDueDate, 'yyyy-MM-dd') : undefined,
+        },
+      });
+
+      setStock(result.stock);
+
+      const paymentMethodLabel = result.sale.paymentMethod;
+      const isPendingPayment = result.transactions.some((transaction) => transaction.status === 'pendente');
+
+      toast({
+        title: isPendingPayment ? 'Venda registrada com boleto!' : 'Venda Finalizada!',
+        description: isPendingPayment
+          ? `Venda registrada como pendente no financeiro via ${paymentMethodLabel}.`
+          : `Venda de R$ ${result.sale.total.toLocaleString('pt-BR', { style: 'currency', currency: 'BRL' })} registrada com sucesso.`,
+      });
+
+      setIsChangeCalcOpen(false);
+      setIsCreditSaleDialogOpen(false);
+
+      if (shouldPrint) {
+        setSaleToPrint(result.sale);
+        setIsInvoiceDialogOpen(true);
+      }
+
+      resetSale();
+    } catch (error) {
+      if (!useSaasSales && shouldUseLegacySaleFallback(error)) {
+        await processSaleLegacy(shouldPrint);
+        return;
+      }
+
+      toast({
+        variant: 'destructive',
+        title: 'Erro ao finalizar venda',
+        description: error instanceof Error ? error.message : 'Nao foi possivel concluir a venda.',
+      });
+    }
+  };
 
   const handleFinishSale = async () => {
     if (saleItems.length === 0) {
@@ -347,30 +471,22 @@ export default function VendasPage() {
       return;
     }
 
-    setCompanyInfoForDialog(null); // Clear previous info to ensure re-fetch
-    setCurrentSaleId(`SALE-${Date.now()}`);
-
-    const companyData = await getCompanyInfo();
-    setCompanyInfoForDialog(companyData);
-
     if (paymentMethod === 'dinheiro') {
         setIsChangeCalcOpen(true);
-    } else if (paymentMethod === 'pix') {
-        if (!companyData?.pixKey) {
-            toast({
-                variant: 'destructive',
-                title: 'Chave PIX não configurada',
-                description: 'Por favor, cadastre uma chave PIX nas configurações da empresa.',
-            });
-            setCurrentSaleId('');
-            setCompanyInfoForDialog(null);
-            return;
-        }
-        setIsPixDialogOpen(true);
-    }
-    else {
+    } else if (paymentMethod === 'boleto') {
+        setIsCreditSaleDialogOpen(true);
+    } else {
         processSale(true);
     }
+  }
+
+  if (session.isLoading) {
+    return (
+      <ModuleLoadingState
+        title="Carregando vendas"
+        description="Preparando produtos, clientes e formas de pagamento."
+      />
+    );
   }
 
   return (
@@ -473,18 +589,30 @@ export default function VendasPage() {
               <CardTitle>Resumo e Pagamento</CardTitle>
             </CardHeader>
             <CardContent className="space-y-6">
-               <div className="space-y-2">
+              <div className="space-y-2">
                   <Label htmlFor="customer">Cliente (Opcional)</Label>
                   <div className="flex gap-2">
-                    <Select value={selectedCustomerId} onValueChange={setSelectedCustomerId}>
-                        <SelectTrigger>
-                            <SelectValue placeholder="Selecione um cliente" />
-                        </SelectTrigger>
-                        <SelectContent>
-                            <SelectItem value="none">Nenhum / Cliente Avulso</SelectItem>
-                            {customers.map(c => <SelectItem key={c.id} value={c.id}>{c.name}</SelectItem>)}
-                        </SelectContent>
-                    </Select>
+                    {useSaasSales ? (
+                      <CustomerAutocomplete
+                        id="customer"
+                        selectedCustomer={customers.find((c) => c.id === selectedCustomerId) ?? null}
+                        onSelect={(customer) => setSelectedCustomerId(customer?.id)}
+                        searchFunction={searchTenantCustomers}
+                        placeholder="Buscar cliente para a venda..."
+                        emptyMessage="Nenhum cliente encontrado."
+                        className="flex-1"
+                      />
+                    ) : (
+                      <Select value={selectedCustomerId} onValueChange={setSelectedCustomerId}>
+                          <SelectTrigger>
+                              <SelectValue placeholder="Selecione um cliente" />
+                          </SelectTrigger>
+                          <SelectContent>
+                              <SelectItem value="none">Nenhum / Cliente Avulso</SelectItem>
+                              {customers.map(c => <SelectItem key={c.id} value={c.id}>{c.name}</SelectItem>)}
+                          </SelectContent>
+                      </Select>
+                    )}
                     <Button variant="outline" size="icon" onClick={() => setIsAddCustomerOpen(true)}><UserPlus /></Button>
                   </div>
               </div>
@@ -513,11 +641,11 @@ export default function VendasPage() {
                       <SelectValue />
                   </SelectTrigger>
                   <SelectContent>
-                      <SelectItem value="dinheiro">Dinheiro</SelectItem>
-                      <SelectItem value="pix">PIX</SelectItem>
-                      <SelectItem value="credito">Cartão de Crédito</SelectItem>
-                      <SelectItem value="debito">Cartão de Débito</SelectItem>
-                      <SelectItem value="parcelado">Parcelado</SelectItem>
+                      {POS_PAYMENT_METHOD_OPTIONS.map((option) => (
+                        <SelectItem key={option.value} value={option.value}>
+                          {option.label}
+                        </SelectItem>
+                      ))}
                   </SelectContent>
                 </Select>
               </div>
@@ -576,13 +704,6 @@ export default function VendasPage() {
         total={finalTotal}
         onConfirm={() => processSale(true)}
     />
-    <PixQrCodeDialog
-        isOpen={isPixDialogOpen}
-        onOpenChange={setIsPixDialogOpen}
-        companyInfo={companyInfoForDialog}
-        sale={{ total: finalTotal, id: currentSaleId }}
-        onConfirm={() => processSale(true)}
-    />
     <SaleInvoiceDialog
       isOpen={isInvoiceDialogOpen}
       onOpenChange={setIsInvoiceDialogOpen}
@@ -591,13 +712,13 @@ export default function VendasPage() {
     <AlertDialog open={isCreditSaleDialogOpen} onOpenChange={setIsCreditSaleDialogOpen}>
         <AlertDialogContent>
             <AlertDialogHeader>
-                <AlertDialogTitle>Confirmar Venda a Prazo</AlertDialogTitle>
+                <AlertDialogTitle>Confirmar pagamento pendente</AlertDialogTitle>
                 <AlertDialogDescription>
                     Esta ação registrará a venda e criará uma pendência no Contas a Receber. Deseja gerar uma fatura para impressão?
                 </AlertDialogDescription>
             </AlertDialogHeader>
             <AlertDialogFooter>
-                <AlertDialogAction variant="outline" onClick={() => processSale(false)}>Salvar sem Fatura</AlertDialogAction>
+                <AlertDialogAction className="border border-input bg-background text-foreground hover:bg-accent hover:text-accent-foreground" onClick={() => processSale(false)}>Salvar sem Fatura</AlertDialogAction>
                 <AlertDialogAction onClick={() => processSale(true)}>
                   <FileSignature className="mr-2 h-4 w-4" />
                   Salvar e Gerar Fatura
