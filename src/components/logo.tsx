@@ -12,13 +12,18 @@ import { useSidebar } from '@/components/ui/sidebar';
 interface LogoProps {
     className?: string;
     onLoginPage?: boolean;
+    skipCompanyInfo?: boolean;
 }
 
-const useCompanyInfo = () => {
+const useCompanyInfo = (enabled: boolean) => {
   const [companyInfo, setCompanyInfo] = React.useState<CompanyInfo | null>(null);
 
   React.useEffect(() => {
     const fetchCompanyInfo = async () => {
+        if (!enabled) {
+          setCompanyInfo(null);
+          return;
+        }
         try {
           const info = await getEffectiveCompanyInfo();
           setCompanyInfo(info);
@@ -28,7 +33,7 @@ const useCompanyInfo = () => {
     };
 
     fetchCompanyInfo();
-  }, []);
+  }, [enabled]);
 
   return companyInfo;
 };
@@ -53,8 +58,8 @@ function LogoInternal({ className, companyInfo }: { className?: string; companyI
 }
 
 
-export function Logo({ className, onLoginPage = false }: LogoProps) {
-  const companyInfo = useCompanyInfo();
+export function Logo({ className, onLoginPage = false, skipCompanyInfo = false }: LogoProps) {
+  const companyInfo = useCompanyInfo(!skipCompanyInfo);
   
   if (onLoginPage) {
     return (

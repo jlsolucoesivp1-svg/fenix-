@@ -25,7 +25,7 @@ export function AdminShell({ children, operatorLabel, operatorEmail }: AdminShel
       <Sidebar className="border-r border-sky-500/10">
         <SidebarHeader className="border-b border-sky-500/10 bg-[#07162d]">
           <div className="flex items-center gap-3 text-sky-50">
-            <Logo />
+            <Logo skipCompanyInfo />
           </div>
         </SidebarHeader>
         <SidebarContent className="bg-[#07162d] text-sky-50">

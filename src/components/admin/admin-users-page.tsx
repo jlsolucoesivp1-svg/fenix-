@@ -53,6 +53,8 @@ export function AdminUsersPage({ companies, initialCompanyId }: AdminUsersPagePr
   const [isResettingPassword, setIsResettingPassword] = React.useState(false);
 
   const selectedCompany = companies.find((company) => company.companyId === selectedCompanyId) || null;
+  const visibleUsers = Array.isArray(users) ? users : [];
+  const availableRoles = Array.isArray(roles) ? roles : [];
 
   const loadUsers = React.useCallback(async () => {
     if (!selectedCompanyId) {
@@ -63,6 +65,9 @@ export function AdminUsersPage({ companies, initialCompanyId }: AdminUsersPagePr
     try {
       setIsLoading(true);
       const result = await listSuperAdminCompanyUsers(selectedCompanyId);
+      if (!Array.isArray(result.users) || !Array.isArray(result.roles)) {
+        throw new Error('Resposta invalida ao carregar usuarios da empresa.');
+      }
       setUsers(result.users);
       setRoles(result.roles);
     } catch (error: any) {
@@ -78,7 +83,7 @@ export function AdminUsersPage({ companies, initialCompanyId }: AdminUsersPagePr
 
   const openEdit = (user: SuperAdminCompanyUser) => {
     setEditingUser(user);
-    setEditForm({ ...toEditForm(user, roles[0]?.id || ''), companyId: selectedCompanyId });
+    setEditForm({ ...toEditForm(user, availableRoles[0]?.id || ''), companyId: selectedCompanyId });
   };
 
   const saveUser = async () => {
@@ -100,7 +105,7 @@ export function AdminUsersPage({ companies, initialCompanyId }: AdminUsersPagePr
   const changeStatus = async () => {
     if (!statusTarget) return;
     try {
-      const form = toEditForm(statusTarget, roles[0]?.id || '');
+      const form = toEditForm(statusTarget, availableRoles[0]?.id || '');
       await updateSuperAdminCompanyUser({ ...form, companyId: selectedCompanyId, status: statusTarget.status === 'active' ? 'inactive' : 'active' });
       toast({ title: statusTarget.status === 'active' ? 'Usuario suspenso' : 'Usuario reativado' });
       setStatusTarget(null);
@@ -147,9 +152,9 @@ export function AdminUsersPage({ companies, initialCompanyId }: AdminUsersPagePr
       <Card className="border-border bg-card shadow-sm">
         <CardHeader><CardTitle>Usuarios vinculados</CardTitle><CardDescription>O Owner permanece identificado e nao perde essa condicao ao ser editado.</CardDescription></CardHeader>
         <CardContent>
-          {!selectedCompanyId ? <ModuleState title="Nenhuma empresa selecionada" description="Escolha um tenant para listar os usuarios vinculados." /> : users.length === 0 && !isLoading ? <ModuleState title="Nenhum usuario encontrado" description="Ainda nao existem usuarios retornados para a empresa selecionada." icon={Users2} /> : (
+          {!selectedCompanyId ? <ModuleState title="Nenhuma empresa selecionada" description="Escolha um tenant para listar os usuarios vinculados." /> : visibleUsers.length === 0 && !isLoading ? <ModuleState title="Nenhum usuario encontrado" description="Ainda nao existem usuarios retornados para a empresa selecionada." icon={Users2} /> : (
             <Table><TableHeader><TableRow><TableHead>Nome e acesso</TableHead><TableHead>Login</TableHead><TableHead>Role</TableHead><TableHead>Status</TableHead><TableHead>Owner</TableHead><TableHead className="text-right">Acoes</TableHead></TableRow></TableHeader>
-              <TableBody>{users.map((user) => <TableRow key={user.id}>
+              <TableBody>{visibleUsers.map((user) => <TableRow key={user.id}>
                 <TableCell><div className="font-medium text-foreground">{user.name}</div><div className="text-xs text-muted-foreground">{user.email || user.id}</div></TableCell>
                 <TableCell>{user.loginName || '—'}</TableCell>
                 <TableCell>{user.roleName || 'Sem role'}{user.roleIsCompanyAdmin ? <Badge className="ml-2" variant="secondary">Admin</Badge> : null}</TableCell>
@@ -169,7 +174,7 @@ export function AdminUsersPage({ companies, initialCompanyId }: AdminUsersPagePr
 
       <Dialog open={Boolean(editingUser && editForm)} onOpenChange={(open) => !open && (setEditingUser(null), setEditForm(null))}>
         <DialogContent><DialogHeader><DialogTitle>Editar usuario</DialogTitle><DialogDescription>As alteracoes sincronizam Supabase Auth, profile, membership e role.</DialogDescription></DialogHeader>
-          {editForm ? <div className="grid gap-4"><div className="space-y-2"><Label>Nome</Label><Input value={editForm.name} onChange={(e) => setEditForm({ ...editForm, name: e.target.value })} /></div><div className="space-y-2"><Label>E-mail de acesso</Label><Input type="email" value={editForm.email} onChange={(e) => setEditForm({ ...editForm, email: e.target.value })} /></div><div className="space-y-2"><Label>Login de compatibilidade</Label><Input value={editForm.loginName || ''} onChange={(e) => setEditForm({ ...editForm, loginName: e.target.value })} /></div><div className="space-y-2"><Label>Role</Label><select className="flex h-10 w-full rounded-md border border-input bg-background px-3 py-2 text-sm" value={editForm.roleId} onChange={(e) => setEditForm({ ...editForm, roleId: e.target.value })}>{roles.map((role) => <option key={role.id} value={role.id}>{role.name}{role.isCompanyAdmin ? ' (Admin)' : ''}</option>)}</select></div><div className="space-y-2"><Label>Status</Label><select className="flex h-10 w-full rounded-md border border-input bg-background px-3 py-2 text-sm" value={editForm.status} onChange={(e) => setEditForm({ ...editForm, status: e.target.value as 'active' | 'inactive' })}><option value="active">Ativo</option><option value="inactive">Suspenso</option></select></div>{editingUser?.isOwner ? <p className="text-sm text-muted-foreground">Este usuario continuara como Owner, independentemente da role selecionada.</p> : null}</div> : null}
+          {editForm ? <div className="grid gap-4"><div className="space-y-2"><Label>Nome</Label><Input value={editForm.name} onChange={(e) => setEditForm({ ...editForm, name: e.target.value })} /></div><div className="space-y-2"><Label>E-mail de acesso</Label><Input type="email" value={editForm.email} onChange={(e) => setEditForm({ ...editForm, email: e.target.value })} /></div><div className="space-y-2"><Label>Login de compatibilidade</Label><Input value={editForm.loginName || ''} onChange={(e) => setEditForm({ ...editForm, loginName: e.target.value })} /></div><div className="space-y-2"><Label>Role</Label><select className="flex h-10 w-full rounded-md border border-input bg-background px-3 py-2 text-sm" value={editForm.roleId} onChange={(e) => setEditForm({ ...editForm, roleId: e.target.value })}>{availableRoles.map((role) => <option key={role.id} value={role.id}>{role.name}{role.isCompanyAdmin ? ' (Admin)' : ''}</option>)}</select></div><div className="space-y-2"><Label>Status</Label><select className="flex h-10 w-full rounded-md border border-input bg-background px-3 py-2 text-sm" value={editForm.status} onChange={(e) => setEditForm({ ...editForm, status: e.target.value as 'active' | 'inactive' })}><option value="active">Ativo</option><option value="inactive">Suspenso</option></select></div>{editingUser?.isOwner ? <p className="text-sm text-muted-foreground">Este usuario continuara como Owner, independentemente da role selecionada.</p> : null}</div> : null}
           <DialogFooter><Button variant="ghost" onClick={() => { setEditingUser(null); setEditForm(null); }}>Cancelar</Button><Button onClick={() => void saveUser()} disabled={isSaving}>{isSaving ? <Loader2 className="mr-2 h-4 w-4 animate-spin" /> : null}Salvar</Button></DialogFooter>
         </DialogContent>
       </Dialog>

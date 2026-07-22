@@ -20,8 +20,8 @@ export async function GET(request: Request) {
       return NextResponse.json({ error: 'companyId obrigatorio.' }, { status: 400 });
     }
 
-    const users = await getSuperAdminCompanyUsers(companyId);
-    return NextResponse.json({ users });
+    const result = await getSuperAdminCompanyUsers(companyId);
+    return NextResponse.json(result);
   } catch (error) {
     console.error('Erro ao carregar usuarios administrativos por empresa:', error);
     return NextResponse.json(
