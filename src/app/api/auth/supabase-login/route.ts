@@ -97,10 +97,20 @@ const resolveSupabaseEmail = async (identifier: string): Promise<string | null> 
 
 const parseSupabaseError = async (response: Response) => {
   try {
-    const payload = (await response.json()) as { msg?: string; error_description?: string; message?: string };
-    return payload.error_description || payload.msg || payload.message || 'Credenciais invalidas.';
+    const payload = (await response.json()) as {
+      error?: string;
+      error_code?: string;
+      code?: string;
+      msg?: string;
+      error_description?: string;
+      message?: string;
+    };
+    return {
+      message: payload.error_description || payload.msg || payload.message || payload.error || 'Credenciais invalidas.',
+      reason: payload.error_code || payload.code || payload.error || null,
+    };
   } catch {
-    return 'Credenciais invalidas.';
+    return { message: 'Credenciais invalidas.', reason: 'unparseable_supabase_error' };
   }
 };
 
@@ -118,11 +128,13 @@ export async function POST(request: Request) {
     if (!normalizedIdentifier || !normalizedPassword) {
       return NextResponse.json({ error: 'Credenciais invalidas.' }, { status: 400 });
     }
+    console.info('[auth:supabase-login] email_received_by_api', { email: normalizedIdentifier });
 
     const normalizedEmail = await resolveSupabaseEmail(normalizedIdentifier);
     if (!normalizedEmail) {
       return NextResponse.json({ error: 'Credenciais invalidas.' }, { status: 401 });
     }
+    console.info('[auth:supabase-login] email_sent_to_supabase', { email: normalizedEmail });
 
     const { url, anonKey } = getSupabaseUserConfig();
     const response = await fetch(`${url}/auth/v1/token?grant_type=password`, {
@@ -140,11 +152,18 @@ export async function POST(request: Request) {
     });
 
     if (!response.ok) {
-      const message = await parseSupabaseError(response);
+      const supabaseError = await parseSupabaseError(response);
       const status = response.status === 400 || response.status === 401 ? 401 : 500;
-      console.info('[auth:supabase-login] password_grant_rejected', { status });
-      return NextResponse.json({ error: message }, { status });
+      console.info('[auth:supabase-login] sign_in_with_password_response', {
+        ok: false,
+        status: response.status,
+        reason: supabaseError.reason,
+        message: supabaseError.message,
+      });
+      return NextResponse.json({ error: supabaseError.message }, { status });
     }
+
+    console.info('[auth:supabase-login] sign_in_with_password_response', { ok: true, status: response.status });
 
     const payload = (await response.json()) as SupabasePasswordGrantResponse;
     if (!payload.access_token) {
