@@ -1,70 +1,83 @@
-# Status do Projeto Fênix SaaS
+# Status do Projeto Fenix SaaS
 
-Atualizado em 2026-07-22 (America/Sao_Paulo).
+Atualizado em 2026-07-24 11:50:44 -03:00 (America/Sao_Paulo).
 
-## Estado atual
+## Estado do repositorio
 
 - Branch atual: `rescue-saas-20260722`.
-- Último commit local: `d457b6a fix(superadmin): correct users response and admin logo context`.
-- Árvore de trabalho limpa no momento desta atualização.
-- Nenhum push ou deploy foi feito nesta etapa.
+- Ultimo commit local e remoto: `c211e92 fix(users): support Supabase admin user response formats`.
+- A branch local esta alinhada com `origin/rescue-saas-20260722`.
+- Arvore de trabalho estava limpa antes desta atualizacao deste arquivo; esta alteracao em `STATUS.md` permanece apenas local ate um futuro commit solicitado.
 
-## Correção mais recente: /admin/usuarios
+## Resolvido hoje
 
-Ao abrir `/admin/usuarios?companyId=...`, o Preview apresentava:
+- Login do Super Admin validado no Preview: `POST /auth/v1/token?grant_type=password` respondeu HTTP 200 e o painel identificou o usuario como platform admin.
+- Criacao de empresa e acesso do administrador inicial revisados; empresa em `trial` e membership ativa permitem acesso ao tenant.
+- Recursao RLS em `company_memberships` corrigida.
+  - A policy `memberships_select_member` chama `is_company_member(company_id)`.
+  - A versao defeituosa da funcao consultava `company_memberships` sem `SECURITY DEFINER`, reexecutando a mesma policy ate gerar `ERROR 54001: stack depth limit exceeded`.
+  - A migration `20260724000011_fix_company_memberships_rls_recursion.sql` restaura as funcoes de autorizacao como `SECURITY DEFINER`, com `search_path` seguro e suporte a empresas `active` e `trial`.
+- Migration de RLS confirmada como aplicada no Supabase remoto: `20260724000011` aparece no historico local e remoto.
+- Login do administrador da empresa funcionando no Auth: o password grant respondeu HTTP 200; a falha posterior de acesso era a recursao de membership, agora corrigida pela migration.
+- Fluxo de criacao parcial de usuario recebeu rollback:
+  - se profile, role, permissoes, membership ou confirmacao final falharem, a role gerenciada e removida e o usuario e excluido de `auth.users`;
+  - as FKs removem profile e membership associados;
+  - a API registra a etapa e a mensagem da falha, sem registrar senha.
+- Formato da resposta administrativa do Supabase Auth corrigido:
+  - `createAuthUser()` agora aceita tanto `{ user: { id } }` quanto o objeto direto `{ id, email, ... }` retornado pelo GoTrue.
 
-- `Uncaught TypeError: z.map is not a function`;
-- duas respostas `401` para `/api/data/companyInfo`.
+## Problema atual
 
-### Causa do erro de listagem
+- Criacao de novo usuario de empresa retorna HTTP `422`.
+- Etapa informada: `criar usuario no Supabase Auth`.
+- Mensagem exibida: `Falha na operacao (422)`.
+- Ainda nao foi registrado o corpo exato retornado pelo Supabase para essa tentativa; portanto ainda nao se sabe se e-mail ja existe ou qual campo esta sendo rejeitado.
 
-`getSuperAdminCompanyUsers()` já retorna o contrato:
+## Proxima acao exata
 
-```ts
-{ users: SuperAdminCompanyUser[]; roles: SuperAdminCompanyRole[] }
+1. Analisar o `POST /auth/v1/admin/users` da tentativa de criacao de usuario.
+2. Registrar o JSON enviado, ocultando/removendo a senha antes do log.
+3. Registrar o status HTTP e o corpo completo da resposta do Supabase.
+4. Identificar `error`, `error_code`, `message` e `msg` retornados.
+5. Confirmar se o e-mail ja existe em `auth.users` ou qual campo esta sendo rejeitado.
+6. Nao corrigir por tentativa antes de apresentar a causa comprovada.
+
+## Arquivos alterados e migrations criadas hoje
+
+- `src/app/api/auth/supabase-login/route.ts`
+- `src/app/api/usuarios/route.ts`
+- `src/app/page.tsx`
+- `src/lib/server/saas-bootstrap.ts`
+- `src/lib/server/saas-control-plane.ts`
+- `src/lib/server/saas-users.ts`
+- `src/lib/storage.ts`
+- `supabase/migrations/20260724000011_fix_company_memberships_rls_recursion.sql`
+
+## Commits, push e deploy
+
+- As correcoes de hoje ja foram commitadas e enviadas para `origin/rescue-saas-20260722`:
+  - `4e74b2d fix(auth): resolve first login for SaaS admin`
+  - `ef5d017 fix(auth): diagnose first login flow`
+  - `10dd1f2 perf(saas): optimize company bootstrap and reduce provisioning latency`
+  - `9c51d01 fix(rls): resolve company_memberships recursion`
+  - `f8b12e4 fix(users): add rollback for failed user provisioning`
+  - `c211e92 fix(users): support Supabase admin user response formats`
+- A migration RLS foi aplicada no Supabase remoto.
+- Existem varios deployments de Preview prontos na Vercel; o mais recente no momento desta atualizacao e `https://fenix-saas-geki944wf-jlsolucoesivp1-3372s-projects.vercel.app`.
+- Nenhum novo commit, push ou deploy foi feito nesta atualizacao de STATUS.
+- A unica alteracao local pendente agora e este `STATUS.md` atualizado.
+
+## Comandos para retomar
+
+```powershell
+Get-Content STATUS.md
+git status --short
+git log -1 --oneline
+vercel.cmd logs --environment preview --no-branch --since 2h --limit 100 --expand --no-color --query "/api/usuarios"
+supabase.cmd migration list --linked
+npm.cmd run build
+git diff --check
+git diff
 ```
 
-Porém, a rota `GET /api/internal/superadmin/users` envolvia esse resultado novamente em `{ users }`. A resposta real ficava assim:
-
-```ts
-{ users: { users: [...], roles: [...] } }
-```
-
-`admin-users-page.tsx` esperava `result.users` como array e executava `users.map(...)`; portanto recebia um objeto. `result.roles` também ficava indefinido.
-
-### Correções aplicadas
-
-- `src/app/api/internal/superadmin/users/route.ts`
-  - Retorna diretamente o contrato `{ users, roles }`, sem envelope duplicado.
-
-- `src/components/admin/admin-users-page.tsx`
-  - Valida `result.users` e `result.roles` com `Array.isArray` antes de atualizar o estado.
-  - Renderiza apenas coleções confirmadas como arrays.
-  - Preserva a mensagem de erro quando a API devolver um contrato inválido.
-
-- `src/components/admin/admin-shell.tsx`
-- `src/components/logo.tsx`
-  - O logo usado pelo Super Admin não consulta informações de empresa.
-  - O comportamento do logo no sistema de tenant e na tela de login permanece inalterado.
-
-### Causa dos 401 de companyInfo
-
-O `AdminShell` utilizava o componente compartilhado `Logo`. Ao montar, ele chamava `getEffectiveCompanyInfo()`, que tentava buscar `/api/data/companyInfo` quando não havia contexto de tenant. Como o Super Admin não depende de uma empresa, a rota respondia `401`.
-
-O shell administrativo agora instrui o logo a não carregar dados de empresa, removendo essa dependência indevida.
-
-## Validação
-
-- `npm.cmd run build` executado com sucesso após as correções.
-- Next.js compilou, validou tipos e gerou as 70 rotas/páginas sem erro.
-
-## Próximo passo
-
-No Preview/Vercel, validar com uma sessão de Super Admin:
-
-1. Abrir `/admin/usuarios?companyId=<id-da-empresa>`.
-2. Confirmar que a lista de usuários e as roles são exibidas sem erro no console.
-3. Confirmar que não há chamadas a `/api/data/companyInfo` nessa página.
-4. Testar edição, alteração de status e redefinição de senha de um usuário de empresa.
-
-Não executar push ou deploy sem nova solicitação.
+Nao fazer commit, push ou deploy sem solicitacao explicita.
