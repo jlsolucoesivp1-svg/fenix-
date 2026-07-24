@@ -42,12 +42,14 @@ type RolePermissionRow = {
   permission_id: string;
 };
 
-type AuthAdminUserResponse = {
-  user?: {
-    id: string;
-    email?: string | null;
-    app_metadata?: Record<string, unknown> | null;
-  } | null;
+type AuthAdminUser = {
+  id: string;
+  email?: string | null;
+  app_metadata?: Record<string, unknown> | null;
+};
+
+type AuthAdminUserResponse = AuthAdminUser & {
+  user?: AuthAdminUser | null;
 };
 
 type UserInput = Partial<User> & {
@@ -464,11 +466,12 @@ const createAuthUser = async (params: {
   });
 
   const payload = await parseJsonResponse<AuthAdminUserResponse>(response);
-  if (!payload.user?.id) {
+  const user = payload.user?.id ? payload.user : payload.id ? payload : null;
+  if (!user) {
     throw new Error('Usuario criado sem identificador no Supabase Auth.');
   }
 
-  return payload.user;
+  return user;
 };
 
 const deleteAuthUser = async (userId: string) => {
