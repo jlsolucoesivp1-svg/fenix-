@@ -39,6 +39,7 @@ export async function POST(request: NextRequest) {
 
     return NextResponse.json(createdUser);
   } catch (error) {
+    console.error('Erro ao criar usuario SaaS:', error);
     return NextResponse.json(
       {
         error: error instanceof Error ? error.message : 'Falha ao criar usuario.',

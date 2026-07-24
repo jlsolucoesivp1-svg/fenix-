@@ -471,6 +471,17 @@ const createAuthUser = async (params: {
   return payload.user;
 };
 
+const deleteAuthUser = async (userId: string) => {
+  const { url } = getSupabaseAdminConfig();
+  const response = await fetch(`${url}/auth/v1/admin/users/${userId}`, {
+    method: 'DELETE',
+    headers: buildAdminHeaders(),
+    cache: 'no-store',
+  });
+
+  await parseJsonResponse<unknown>(response);
+};
+
 const updateAuthUser = async (params: {
   userId: string;
   email: string | null;
@@ -590,37 +601,76 @@ export const createSaasUser = async (params: {
   input: UserInput;
 }) => {
   const normalized = validateUserInput(params.input, true);
-  const authUser = await createAuthUser({
-    email: normalized.email,
-    password: normalized.password!,
-    name: normalized.name,
-    login: normalized.login,
-    activeCompanyId: params.companyId,
-  });
+  let authUser: Awaited<ReturnType<typeof createAuthUser>> | null = null;
+  let roleId: string | null = null;
+  let stage = 'criar usuario no Supabase Auth';
 
-  await upsertProfile({
-    userId: authUser.id,
-    name: normalized.name,
-    email: normalized.email,
-    login: normalized.login,
-  });
+  try {
+    const createdAuthUser = await createAuthUser({
+      email: normalized.email,
+      password: normalized.password!,
+      name: normalized.name,
+      login: normalized.login,
+      activeCompanyId: params.companyId,
+    });
+    authUser = createdAuthUser;
 
-  const role = await ensureManagedRole(params.companyId, authUser.id, normalized.name);
-  await replaceRolePermissions(role.id, mapLegacyPermissionsToCodes(normalized.permissions));
-  await upsertMembership({
-    companyId: params.companyId,
-    userId: authUser.id,
-    roleId: role.id,
-    status: normalized.status,
-  });
+    stage = 'criar profile';
+    await upsertProfile({
+      userId: createdAuthUser.id,
+      name: normalized.name,
+      email: normalized.email,
+      login: normalized.login,
+    });
 
-  const users = await listSaasUsers(params.companyId);
-  const createdUser = users.find((user) => user.id === authUser.id);
-  if (!createdUser) {
-    throw new Error('Usuario criado, mas nao retornado pela listagem do tenant.');
+    stage = 'criar role';
+    const role = await ensureManagedRole(params.companyId, createdAuthUser.id, normalized.name);
+    roleId = role.id;
+
+    stage = 'atribuir permissoes da role';
+    await replaceRolePermissions(role.id, mapLegacyPermissionsToCodes(normalized.permissions));
+
+    stage = 'criar membership';
+    await upsertMembership({
+      companyId: params.companyId,
+      userId: createdAuthUser.id,
+      roleId: role.id,
+      status: normalized.status,
+    });
+
+    stage = 'confirmar usuario no tenant';
+    const users = await listSaasUsers(params.companyId);
+    const createdUser = users.find((user) => user.id === createdAuthUser.id);
+    if (!createdUser) {
+      throw new Error('Usuario criado, mas nao retornado pela listagem do tenant.');
+    }
+
+    return createdUser;
+  } catch (error) {
+    const rollbackFailures: string[] = [];
+
+    if (roleId) {
+      try {
+        await deleteRows('roles', { id: `eq.${roleId}` });
+      } catch (rollbackError) {
+        rollbackFailures.push(`role: ${rollbackError instanceof Error ? rollbackError.message : 'falha desconhecida'}`);
+      }
+    }
+
+    if (authUser) {
+      try {
+        // auth.users cascades to profiles and company_memberships through their
+        // foreign keys, leaving no identity partially provisioned.
+        await deleteAuthUser(authUser.id);
+      } catch (rollbackError) {
+        rollbackFailures.push(`auth: ${rollbackError instanceof Error ? rollbackError.message : 'falha desconhecida'}`);
+      }
+    }
+
+    const reason = error instanceof Error ? error.message : 'falha desconhecida';
+    const rollbackSuffix = rollbackFailures.length > 0 ? ` Rollback incompleto (${rollbackFailures.join('; ')}).` : '';
+    throw new Error(`Falha ao criar usuario na etapa "${stage}": ${reason}.${rollbackSuffix}`);
   }
-
-  return createdUser;
 };
 
 export const updateSaasUser = async (params: {
