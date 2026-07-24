@@ -57,6 +57,8 @@ type BootstrapLegacyCompanyPayload = {
 type BootstrapInput = {
   actor: User;
   supabaseUserId: string;
+  /** Auth user returned by the immediately preceding create operation. */
+  authUser?: SupabaseAuthUser;
   companySlug?: string | null;
   companyTradeName?: string | null;
   companyLegalName?: string | null;
@@ -453,29 +455,6 @@ const updateSupabaseAuthUserMetadata = async (params: {
 };
 
 const ensureCompany = async (payload: BootstrapLegacyCompanyPayload): Promise<CompanyRow> => {
-  const existing = await restSelectSingle<CompanyRow>('companies', {
-    select: 'id,slug,trade_name,legal_name,document_number,status',
-    slug: `eq.${payload.slug}`,
-  });
-
-  if (existing) {
-    return restUpsertSingle<CompanyRow>(
-      'companies',
-      {
-        id: existing.id,
-        slug: payload.slug,
-        trade_name: payload.tradeName,
-        legal_name: payload.legalName,
-        document_number: payload.documentNumber,
-        phone: payload.phone,
-        email: payload.email,
-        address_line: payload.addressLine,
-        status: 'active',
-      },
-      'slug'
-    );
-  }
-
   return restUpsertSingle<CompanyRow>(
     'companies',
     {
@@ -513,19 +492,20 @@ const ensureRole = async (params: {
   companyId: string;
   permissionCodes: PermissionCode[];
 }) => {
-  const role = await restUpsertSingle<RoleRow>(
-    'roles',
-    {
-      company_id: params.companyId,
-      name: ADMIN_ROLE_NAME,
-      description: 'Role administrativa inicial criada pelo bootstrap SaaS.',
-      is_system: false,
-      is_company_admin: true,
-    },
-    'company_id,name'
-  );
-
-  const permissions = await fetchPermissionsByCodes(params.permissionCodes);
+  const [role, permissions] = await Promise.all([
+    restUpsertSingle<RoleRow>(
+      'roles',
+      {
+        company_id: params.companyId,
+        name: ADMIN_ROLE_NAME,
+        description: 'Role administrativa inicial criada pelo bootstrap SaaS.',
+        is_system: false,
+        is_company_admin: true,
+      },
+      'company_id,name'
+    ),
+    fetchPermissionsByCodes(params.permissionCodes),
+  ]);
   await restUpsertMany(
     'role_permissions',
     permissions.map((permission) => ({
@@ -648,10 +628,11 @@ export const bootstrapFirstCompanyForSupabaseUser = async (
     throw new SaasBootstrapError('supabaseUserId invalido.', 400);
   }
 
+  const providedAuthUser = input.authUser?.id === supabaseUserId ? input.authUser : null;
   const [companyInfo, settings, authUser] = await Promise.all([
     getSingleton<CompanyInfo>('companyInfo'),
     getSingleton<AppSettings>('settings'),
-    fetchSupabaseAuthUser(supabaseUserId),
+    providedAuthUser ? Promise.resolve(providedAuthUser) : fetchSupabaseAuthUser(supabaseUserId),
   ]);
 
   const companyPayload = buildLegacyCompanyPayload(companyInfo, input);
@@ -678,22 +659,23 @@ export const bootstrapFirstCompanyForSupabaseUser = async (
     ensureCompanyBranding(company.id, companyInfo),
   ]);
 
-  if (input.forceSetActiveCompany !== false) {
-    await updateSupabaseAuthUserMetadata({
-      userId: authUser.id,
-      activeCompanyId: company.id,
-      loginName: trimOrNull(input.profileLoginName) || trimOrNull(input.actor.login),
-      existingAppMetadata: authUser.app_metadata,
-    });
-  }
-
-  await insertBootstrapAuditLog({
-    companyId: company.id,
-    actorUserId: input.actor.id,
-    authUserId: authUser.id,
-    legacyLogin: input.actor.login,
-    companySlug: company.slug,
-  });
+  await Promise.all([
+    input.forceSetActiveCompany !== false
+      ? updateSupabaseAuthUserMetadata({
+          userId: authUser.id,
+          activeCompanyId: company.id,
+          loginName: trimOrNull(input.profileLoginName) || trimOrNull(input.actor.login),
+          existingAppMetadata: authUser.app_metadata,
+        })
+      : Promise.resolve(),
+    insertBootstrapAuditLog({
+      companyId: company.id,
+      actorUserId: input.actor.id,
+      authUserId: authUser.id,
+      legacyLogin: input.actor.login,
+      companySlug: company.slug,
+    }),
+  ]);
 
   return {
     companyId: company.id,

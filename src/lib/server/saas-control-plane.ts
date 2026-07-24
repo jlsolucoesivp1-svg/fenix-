@@ -1016,6 +1016,7 @@ export const createCompanyFromPanel = async (
     bootstrapResult = await bootstrapFirstCompanyForSupabaseUser({
       actor: input.actor,
       supabaseUserId: authUser.id,
+      authUser,
       companySlug: normalized.companySlug,
       companyTradeName: normalized.companyTradeName,
       companyLegalName: normalized.companyLegalName,
