@@ -2,81 +2,69 @@
 
 Atualizado em 2026-07-22 (America/Sao_Paulo).
 
-## Status Geral
+## Estado atual
 
 - Branch atual: `rescue-saas-20260722`.
-- Último commit realizado: `170434f fix(saas): normalize auth response and rollback flow`.
-- Commit da correção visual do painel: `3f05584 fix(admin): normalize theme contrast and form accessibility`.
-- Deploy na Vercel funcionando.
-- Painel `/admin` funcionando.
-- Tema do painel corrigido e contraste normalizado.
+- Último commit local: `d457b6a fix(superadmin): correct users response and admin logo context`.
+- Árvore de trabalho limpa no momento desta atualização.
+- Nenhum push ou deploy foi feito nesta etapa.
 
-## O que foi concluído
+## Correção mais recente: /admin/usuarios
 
-- Integração GitHub ↔ Vercel funcionando.
-- Login do Super Admin funcionando.
-- Usuário presente em `platform_admins`.
-- Painel administrativo acessível.
-- Correção visual aplicada e validada.
-- Build passando.
+Ao abrir `/admin/usuarios?companyId=...`, o Preview apresentava:
 
-## Problema encontrado hoje
+- `Uncaught TypeError: z.map is not a function`;
+- duas respostas `401` para `/api/data/companyInfo`.
 
-Durante o cadastro de empresas:
+### Causa do erro de listagem
 
-- O usuário era criado no Supabase Auth.
-- O sistema retornava `Supabase Auth não retornou o usuário criado`.
-- A empresa não era criada em `companies`.
-- `company_memberships` não era criada.
-- `company_settings` e `company_branding` também não eram criadas.
+`getSuperAdminCompanyUsers()` já retorna o contrato:
 
-## Diagnóstico
+```ts
+{ users: SuperAdminCompanyUser[]; roles: SuperAdminCompanyRole[] }
+```
 
-Foi identificado que:
+Porém, a rota `GET /api/internal/superadmin/users` envolvia esse resultado novamente em `{ users }`. A resposta real ficava assim:
 
-- O endpoint do Supabase Auth retornava o usuário em formato diferente do esperado.
-- O código esperava `payload.user.id`.
-- Era necessário normalizar a resposta.
-- A criação do usuário ocorria fora do bloco de rollback.
+```ts
+{ users: { users: [...], roles: [...] } }
+```
 
-## Correções aplicadas
+`admin-users-page.tsx` esperava `result.users` como array e executava `users.map(...)`; portanto recebia um objeto. `result.roles` também ficava indefinido.
 
-Arquivos alterados:
+### Correções aplicadas
 
-- `src/lib/server/saas-bootstrap.ts`
-  - Normalização da resposta do Auth para aceitar tanto o usuário no objeto raiz quanto em `payload.user`.
-  - Correção em `fetchSupabaseAuthUser`.
-  - Preservação das mensagens reais de erro retornadas pelo Supabase.
+- `src/app/api/internal/superadmin/users/route.ts`
+  - Retorna diretamente o contrato `{ users, roles }`, sem envelope duplicado.
 
-- `src/lib/server/saas-control-plane.ts`
-  - Inclusão da criação do usuário dentro do fluxo de rollback.
-  - Limpeza do usuário Auth em caso de falha posterior.
+- `src/components/admin/admin-users-page.tsx`
+  - Valida `result.users` e `result.roles` com `Array.isArray` antes de atualizar o estado.
+  - Renderiza apenas coleções confirmadas como arrays.
+  - Preserva a mensagem de erro quando a API devolver um contrato inválido.
 
-Nenhuma migration, RLS ou banco foi alterado.
+- `src/components/admin/admin-shell.tsx`
+- `src/components/logo.tsx`
+  - O logo usado pelo Super Admin não consulta informações de empresa.
+  - O comportamento do logo no sistema de tenant e na tela de login permanece inalterado.
 
-Build executado com sucesso após as correções.
+### Causa dos 401 de companyInfo
 
-## Próximo passo obrigatório
+O `AdminShell` utilizava o componente compartilhado `Logo`. Ao montar, ele chamava `getEffectiveCompanyInfo()`, que tentava buscar `/api/data/companyInfo` quando não havia contexto de tenant. Como o Super Admin não depende de uma empresa, a rota respondia `401`.
 
-Realizar um teste ponta a ponta:
+O shell administrativo agora instrui o logo a não carregar dados de empresa, removendo essa dependência indevida.
 
-1. Criar uma nova empresa pelo `/admin`.
-2. Confirmar a criação do usuário em Authentication.
-3. Confirmar a criação em `companies`.
-4. Confirmar a criação em `company_memberships`.
-5. Confirmar a criação de `company_settings`.
-6. Confirmar a criação de `company_branding`.
-7. Confirmar que a empresa aparece imediatamente na listagem.
-8. Confirmar o login do administrador da empresa.
+## Validação
 
-Somente após esse teste:
+- `npm.cmd run build` executado com sucesso após as correções.
+- Next.js compilou, validou tipos e gerou as 70 rotas/páginas sem erro.
 
-- fazer commit;
-- fazer push;
-- validar na Vercel.
+## Próximo passo
 
-## Observações
+No Preview/Vercel, validar com uma sessão de Super Admin:
 
-- Ainda existem arquivos antigos e alterações não relacionadas no repositório.
-- Não utilizar `git add .` sem revisar cuidadosamente os arquivos.
-- As correções de tema e de provisionamento já possuem commits locais; validar o teste ponta a ponta antes de qualquer novo push ou deploy.
+1. Abrir `/admin/usuarios?companyId=<id-da-empresa>`.
+2. Confirmar que a lista de usuários e as roles são exibidas sem erro no console.
+3. Confirmar que não há chamadas a `/api/data/companyInfo` nessa página.
+4. Testar edição, alteração de status e redefinição de senha de um usuário de empresa.
+
+Não executar push ou deploy sem nova solicitação.

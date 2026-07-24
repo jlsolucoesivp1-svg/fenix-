@@ -86,7 +86,10 @@ export default function LoginPage() {
     try {
       const normalizedIdentifier = login.trim();
 
-      if (normalizedIdentifier.includes('@')) {
+      try {
+        // SaaS administrators authenticate in Supabase Auth. Their optional
+        // login_name is resolved by the server, while legacy users retain the
+        // existing fallback below.
         const session = await signInWithSupabaseEmailAndPassword(normalizedIdentifier, password);
         toast({
           title: 'Login bem-sucedido!',
@@ -111,6 +114,10 @@ export default function LoginPage() {
         });
         setIsLoading(false);
         return;
+      } catch (supabaseError) {
+        if (normalizedIdentifier.includes('@')) {
+          throw supabaseError;
+        }
       }
 
       const user = await signInWithLoginAndPassword(normalizedIdentifier, password);
