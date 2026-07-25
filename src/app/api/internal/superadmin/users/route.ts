@@ -54,7 +54,6 @@ export async function PATCH(request: Request) {
       userId,
       name: String(body.name || ''),
       email: String(body.email || ''),
-      loginName: typeof body.loginName === 'string' ? body.loginName : null,
       roleId: String(body.roleId || ''),
       status: body.status === 'inactive' ? 'inactive' : 'active',
       actorSupabaseUserId: auth.session.supabaseUser?.id || null,

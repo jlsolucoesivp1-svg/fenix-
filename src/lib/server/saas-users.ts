@@ -259,7 +259,7 @@ const fetchProfiles = async (userIds: string[]) => {
   }
 
   return listRows<ProfileRow>('profiles', {
-    select: 'id,full_name,email,login_name',
+    select: 'id,full_name,email',
     id: `in.(${userIds.join(',')})`,
   });
 };
@@ -397,7 +397,6 @@ const upsertProfile = async (params: {
   userId: string;
   name: string;
   email: string | null;
-  login: string | null;
 }) => {
   await upsertRows<ProfileRow>(
     'profiles',
@@ -405,11 +404,10 @@ const upsertProfile = async (params: {
       id: params.userId,
       full_name: params.name,
       email: params.email,
-      login_name: params.login,
     },
     {
       on_conflict: 'id',
-      select: 'id,full_name,email,login_name',
+      select: 'id,full_name,email',
     }
   );
 };
@@ -443,7 +441,6 @@ const createAuthUser = async (params: {
   email: string;
   password: string;
   name: string;
-  login: string | null;
   activeCompanyId: string;
 }) => {
   const { url } = getSupabaseAdminConfig();
@@ -457,7 +454,6 @@ const createAuthUser = async (params: {
     },
     app_metadata: {
       active_company_id: params.activeCompanyId,
-      login_name: params.login,
     },
   };
   const response = await fetch(authUsersUrl, {
@@ -543,7 +539,6 @@ const updateAuthUser = async (params: {
   userId: string;
   email: string | null;
   password?: string | null;
-  login: string | null;
   activeCompanyId: string;
 }) => {
   const { url } = getSupabaseAdminConfig();
@@ -555,7 +550,6 @@ const updateAuthUser = async (params: {
       ...(params.password ? { password: params.password } : {}),
       app_metadata: {
         active_company_id: params.activeCompanyId,
-        login_name: params.login,
       },
     }),
     cache: 'no-store',
@@ -570,14 +564,14 @@ const toManagedUser = (params: {
   permissionCodes: PermissionCode[];
 }) => {
   const profile = params.profile;
-  const login = profile?.login_name || profile?.email || params.membership.user_id;
-  const name = profile?.full_name || profile?.email || login;
+  const email = profile?.email || undefined;
+  const name = profile?.full_name || email || params.membership.user_id;
 
   return {
     id: params.membership.user_id,
     name,
-    login,
-    email: profile?.email || undefined,
+    login: email || params.membership.user_id,
+    email,
     status: params.membership.status,
     isOwner: params.membership.is_owner,
     permissions: mapPermissionCodesToLegacy(params.permissionCodes, params.membership.is_owner),
@@ -628,7 +622,6 @@ export const listSaasUsers = async (companyId: string): Promise<User[]> => {
 const validateUserInput = (input: UserInput, requirePassword: boolean) => {
   const name = input.name?.trim();
   const email = input.email?.trim().toLowerCase();
-  const login = normalizeText(input.login);
   const password = input.password?.trim();
 
   if (!name) {
@@ -646,7 +639,6 @@ const validateUserInput = (input: UserInput, requirePassword: boolean) => {
   return {
     name,
     email,
-    login,
     password: password || null,
     status: (input.status ?? 'active') as MembershipStatus,
     permissions: input.permissions ?? { ...NO_USER_PERMISSIONS },
@@ -667,7 +659,6 @@ export const createSaasUser = async (params: {
       email: normalized.email,
       password: normalized.password!,
       name: normalized.name,
-      login: normalized.login,
       activeCompanyId: params.companyId,
     });
     authUser = createdAuthUser;
@@ -677,7 +668,6 @@ export const createSaasUser = async (params: {
       userId: createdAuthUser.id,
       name: normalized.name,
       email: normalized.email,
-      login: normalized.login,
     });
 
     stage = 'criar role';
@@ -745,7 +735,6 @@ export const updateSaasUser = async (params: {
     userId: params.userId,
     email: normalized.email,
     password: normalized.password,
-    login: normalized.login,
     activeCompanyId: params.companyId,
   });
 
@@ -753,7 +742,6 @@ export const updateSaasUser = async (params: {
     userId: params.userId,
     name: normalized.name,
     email: normalized.email,
-    login: normalized.login,
   });
 
   const role = await ensureManagedRole(params.companyId, params.userId, normalized.name);

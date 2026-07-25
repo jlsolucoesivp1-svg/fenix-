@@ -153,11 +153,11 @@ export default function LoginPage() {
           {hasUsers ? (
             <form onSubmit={handleLogin} className="space-y-4 pt-4">
               <div className="space-y-2">
-                <Label htmlFor="login">Login ou E-mail</Label>
+                <Label htmlFor="login">E-mail</Label>
                 <Input
                   id="login"
-                  type="text"
-                  placeholder="seu.login ou email@dominio.com"
+                  type="email"
+                  placeholder="email@dominio.com"
                   autoCapitalize="none"
                   autoCorrect="off"
                   spellCheck={false}

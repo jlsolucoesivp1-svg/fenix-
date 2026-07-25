@@ -48,7 +48,6 @@ const DEFAULT_PERMISSIONS: UserPermissions = {
 
 const DEFAULT_FORM_STATE: Partial<User> = {
   name: '',
-  login: '',
   email: '',
   password: '',
   status: 'active',
@@ -202,10 +201,6 @@ export default function UsuariosPage() {
         throw new Error('E-mail do usuario e obrigatorio no runtime SaaS.');
       }
 
-      if (!useSaasUsers && !formState.login?.trim()) {
-        throw new Error('Login do usuario e obrigatorio.');
-      }
-
       if (!editingUser && !formState.password?.trim()) {
         throw new Error('Senha do usuario e obrigatoria.');
       }
@@ -344,7 +339,6 @@ export default function UsuariosPage() {
               <TableHeader>
                 <TableRow>
                   <TableHead>Nome</TableHead>
-                  <TableHead>Login</TableHead>
                   <TableHead>E-mail</TableHead>
                   <TableHead>Status</TableHead>
                   <TableHead className="text-right">Acoes</TableHead>
@@ -353,13 +347,13 @@ export default function UsuariosPage() {
               <TableBody>
                 {isLoading ? (
                   <TableRow>
-                    <TableCell colSpan={5} className="h-24 text-center">
+                    <TableCell colSpan={4} className="h-24 text-center">
                       Carregando usuarios...
                     </TableCell>
                   </TableRow>
                 ) : loadError ? (
                   <TableRow>
-                    <TableCell colSpan={5} className="p-6">
+                    <TableCell colSpan={4} className="p-6">
                       <ModuleState
                         title="Falha ao carregar usuarios"
                         description={loadError}
@@ -372,7 +366,7 @@ export default function UsuariosPage() {
                   </TableRow>
                 ) : users.length === 0 ? (
                   <TableRow>
-                    <TableCell colSpan={5} className="p-6">
+                    <TableCell colSpan={4} className="p-6">
                       <ModuleState
                         title="Nenhum usuario encontrado"
                         description="Ainda nao existem usuarios vinculados a empresa ativa."
@@ -386,7 +380,6 @@ export default function UsuariosPage() {
                   users.map((user) => (
                     <TableRow key={user.id}>
                       <TableCell className="font-medium">{user.name}</TableCell>
-                      <TableCell>{user.login}</TableCell>
                       <TableCell>{user.email || '-'}</TableCell>
                       <TableCell>
                         <div className="flex items-center gap-2">
@@ -457,7 +450,7 @@ export default function UsuariosPage() {
                   <UserIcon className="mr-2 h-5 w-5" />
                   Dados do Usuario
                 </h3>
-                <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
+                <div className="grid grid-cols-1 gap-4">
                   <div className="space-y-2">
                     <Label htmlFor="name">Nome</Label>
                     <Input
@@ -465,16 +458,6 @@ export default function UsuariosPage() {
                       value={formState.name || ''}
                       onChange={(event) => handleFieldChange('name', event.target.value)}
                       disabled={!canManageUsers}
-                    />
-                  </div>
-                  <div className="space-y-2">
-                    <Label htmlFor="login">Login</Label>
-                    <Input
-                      id="login"
-                      value={formState.login || ''}
-                      onChange={(event) => handleFieldChange('login', event.target.value)}
-                      disabled={!canManageUsers}
-                      placeholder={useSaasUsers ? 'usuario ou apelido interno' : 'login de acesso'}
                     />
                   </div>
                 </div>

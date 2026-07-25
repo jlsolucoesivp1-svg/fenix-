@@ -185,7 +185,6 @@ export interface UpdateSuperAdminCompanyUserInput {
   userId: string;
   name: string;
   email: string;
-  loginName?: string | null;
   roleId: string;
   status: 'active' | 'inactive';
   actorSupabaseUserId: string | null;
@@ -522,11 +521,10 @@ const updateSupabaseAuthUserForSuperAdmin = async (params: {
       ...(params.email ? { email: params.email } : {}),
       ...(params.name ? { user_metadata: { ...(params.user.user_metadata ?? {}), full_name: params.name } } : {}),
       ...(params.password ? { password: params.password } : {}),
-      ...(params.loginName !== undefined || params.activeCompanyId !== undefined
+      ...(params.activeCompanyId !== undefined
         ? {
             app_metadata: {
               ...(params.user.app_metadata ?? {}),
-              ...(params.loginName !== undefined ? { login_name: params.loginName } : {}),
               ...(params.activeCompanyId !== undefined ? { active_company_id: params.activeCompanyId } : {}),
             },
           }
@@ -851,7 +849,6 @@ const auditSuperAdminUserChanges = async (params: {
 export const updateSuperAdminCompanyUser = async (input: UpdateSuperAdminCompanyUserInput) => {
   const name = input.name.trim();
   const email = input.email.trim().toLowerCase();
-  const loginName = normalizeText(input.loginName);
   if (!name) throw new SaasBootstrapError('Nome do usuario obrigatorio.', 400);
   if (!email || !email.includes('@')) throw new SaasBootstrapError('E-mail do usuario invalido.', 400);
   if (input.status !== 'active' && input.status !== 'inactive') {
@@ -874,13 +871,12 @@ export const updateSuperAdminCompanyUser = async (input: UpdateSuperAdminCompany
     user: current.authUser,
     email,
     name,
-    loginName,
     activeCompanyId,
   });
   await Promise.all([
     patchRows<ProfileRow>(
       'profiles',
-      { full_name: name, email, login_name: loginName },
+      { full_name: name, email },
       { id: `eq.${input.userId}` }
     ),
     patchRows<MembershipRow>(
@@ -893,7 +889,6 @@ export const updateSuperAdminCompanyUser = async (input: UpdateSuperAdminCompany
   const actions: Array<{ action: string; metadata?: Record<string, unknown>; severity?: AuditSeverity }> = [];
   if (current.profile?.full_name !== name) actions.push({ action: 'superadmin_user_name_updated' });
   if ((current.authUser.email || '').toLowerCase() !== email) actions.push({ action: 'superadmin_user_email_updated' });
-  if ((current.profile?.login_name || null) !== loginName) actions.push({ action: 'superadmin_user_login_updated' });
   if (current.membership.role_id !== nextRole.id) {
     actions.push({ action: 'superadmin_user_role_updated', metadata: { previous_role_id: current.membership.role_id, next_role_id: nextRole.id } });
   }

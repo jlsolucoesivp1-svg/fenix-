@@ -463,12 +463,12 @@ export const signInWithLoginAndPassword = async (login: string, password: string
 };
 
 export const signInWithSupabaseEmailAndPassword = async (
-  identifier: string,
+  email: string,
   password: string
 ): Promise<ClientAppSession> => {
   const payload = await apiFetch<ClientAppSession>('/api/auth/supabase-login', {
     method: 'POST',
-    body: JSON.stringify({ identifier, password }),
+    body: JSON.stringify({ email, password }),
   });
 
   clearBrowserSessionMarker();
