@@ -115,36 +115,11 @@ const getLegacyAuthenticatedUser = async (): Promise<User | null> => {
 };
 
 export const getAuthenticatedAppSession = async (): Promise<AuthenticatedAppSession> => {
-  const [legacyUser, supabaseSession] = await Promise.all([
-    getLegacyAuthenticatedUser(),
-    getSupabaseSessionState(),
-  ]);
+  const supabaseSession = await getSupabaseSessionState();
   const supabasePermissions =
     supabaseSession?.tenantAccess.canAccessTenant && supabaseSession.tenantAccess.activeCompanyId
       ? await getSaasUserPermissions(supabaseSession.tenantAccess.activeCompanyId, supabaseSession.user.id)
       : null;
-
-  if (legacyUser && supabaseSession) {
-    return {
-      authSource: 'legacy+supabase',
-      user: legacyUser,
-      tenantContext: supabaseSession.tenantContext,
-      supabaseUser: supabaseSession.user,
-      tenantAccess: supabaseSession.tenantAccess,
-      effectivePermissions: legacyUser.permissions,
-    };
-  }
-
-  if (legacyUser) {
-    return {
-      authSource: 'legacy',
-      user: legacyUser,
-      tenantContext: null,
-      supabaseUser: null,
-      tenantAccess: null,
-      effectivePermissions: legacyUser.permissions,
-    };
-  }
 
   if (supabaseSession) {
     return {

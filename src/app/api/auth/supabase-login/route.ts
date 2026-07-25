@@ -1,19 +1,12 @@
 import { NextResponse } from 'next/server';
 import { clearSessionCookie } from '@/lib/server/session';
 import {
-  clearSupabaseSessionCookies,
-  fetchSupabaseUserByAccessToken,
-  writeSupabaseSessionCookies,
+  getSupabaseSessionState,
 } from '@/lib/server/supabase-session';
-import { getSupabaseUserConfig } from '@/lib/server/supabase-user';
 import { assertServiceRoleUsageAllowed, getSupabaseAdminConfig } from '@/lib/server/supabase-admin';
 import { getSaasUserPermissions } from '@/lib/server/saas-users';
 import { findPlatformAdminForSession } from '@/lib/server/superadmin';
-
-type SupabasePasswordGrantResponse = {
-  access_token?: string;
-  refresh_token?: string;
-};
+import { createSupabaseServerClient } from '@/lib/supabase/server';
 
 type ProfileLookup = {
   id: string;
@@ -136,50 +129,25 @@ export async function POST(request: Request) {
     }
     console.info('[auth:supabase-login] email_sent_to_supabase', { email: normalizedEmail });
 
-    const { url, anonKey } = getSupabaseUserConfig();
-    const response = await fetch(`${url}/auth/v1/token?grant_type=password`, {
-      method: 'POST',
-      headers: {
-        apikey: anonKey,
-        Authorization: `Bearer ${anonKey}`,
-        'Content-Type': 'application/json',
-      },
-      body: JSON.stringify({
-        email: normalizedEmail,
-        password: normalizedPassword,
-      }),
-      cache: 'no-store',
+    const supabase = await createSupabaseServerClient();
+    const { error: signInError } = await supabase.auth.signInWithPassword({
+      email: normalizedEmail,
+      password: normalizedPassword,
     });
 
-    if (!response.ok) {
-      const supabaseError = await parseSupabaseError(response);
-      const status = response.status === 400 || response.status === 401 ? 401 : 500;
+    if (signInError) {
       console.info('[auth:supabase-login] sign_in_with_password_response', {
         ok: false,
-        status: response.status,
-        reason: supabaseError.reason,
-        message: supabaseError.message,
+        status: signInError.status || 400,
+        reason: signInError.code || null,
+        message: signInError.message,
       });
-      return NextResponse.json({ error: supabaseError.message }, { status });
+      return NextResponse.json({ error: 'Credenciais invalidas.' }, { status: 401 });
     }
 
-    console.info('[auth:supabase-login] sign_in_with_password_response', { ok: true, status: response.status });
-
-    const payload = (await response.json()) as SupabasePasswordGrantResponse;
-    if (!payload.access_token) {
-      return NextResponse.json({ error: 'Sessao Supabase nao retornou access token.' }, { status: 500 });
-    }
-
-    await Promise.all([
-      clearSessionCookie(),
-      clearSupabaseSessionCookies(),
-      writeSupabaseSessionCookies({
-        accessToken: payload.access_token,
-        refreshToken: payload.refresh_token || null,
-      }),
-    ]);
-
-    const supabaseSession = await fetchSupabaseUserByAccessToken(payload.access_token);
+    console.info('[auth:supabase-login] sign_in_with_password_response', { ok: true, status: 200 });
+    await clearSessionCookie();
+    const supabaseSession = await getSupabaseSessionState();
     if (!supabaseSession) {
       console.info('[auth:supabase-login] authenticated_session_unavailable');
       return NextResponse.json({ error: 'Nao foi possivel carregar a sessao Supabase.' }, { status: 500 });

@@ -19,9 +19,6 @@ import { Logo } from '@/components/logo';
 import { useToast } from '@/hooks/use-toast';
 import {
   getCurrentAppSession,
-  hasRegisteredUsers,
-  registerUser,
-  signInWithLoginAndPassword,
   signInWithSupabaseEmailAndPassword,
   signOut,
 } from '@/lib/storage';
@@ -44,18 +41,13 @@ export default function LoginPage() {
   React.useEffect(() => {
     const checkSessionAndUsers = async () => {
       try {
-        const [usersExist, session] = await Promise.all([hasRegisteredUsers(), getCurrentAppSession()]);
-        setHasUsers(usersExist);
+        const session = await getCurrentAppSession();
+        setHasUsers(true);
         setStartupError(null);
         setStartupNotice(null);
 
         if (session.isPlatformAdmin) {
           router.replace('/admin');
-          return;
-        }
-
-        if (session.user) {
-          router.replace('/dashboard');
           return;
         }
 
@@ -86,46 +78,15 @@ export default function LoginPage() {
     try {
       const normalizedIdentifier = login.trim();
 
-      try {
-        // SaaS administrators authenticate in Supabase Auth. Their optional
-        // login_name is resolved by the server, while legacy users retain the
-        // existing fallback below.
-        const session = await signInWithSupabaseEmailAndPassword(normalizedIdentifier, password);
-        toast({
-          title: 'Login bem-sucedido!',
-          description: `Bem-vindo, ${session.supabaseUser?.email || normalizedIdentifier}! Redirecionando...`,
-        });
-
-        if (session.isPlatformAdmin) {
-          router.push('/admin');
-          return;
-        }
-
-        if (session.tenantAccess?.canAccessTenant) {
-          router.push('/clientes');
-          return;
-        }
-
-        setStartupNotice('Login realizado, mas esta conta nao possui acesso a nenhuma empresa. Voce pode entrar com outra conta abaixo.');
-        toast({
-          variant: 'destructive',
-          title: 'Sem acesso a empresa',
-          description: 'Esta conta nao possui uma membership ativa em nenhuma empresa.',
-        });
-        setIsLoading(false);
-        return;
-      } catch (supabaseError) {
-        if (normalizedIdentifier.includes('@')) {
-          throw supabaseError;
-        }
-      }
-
-      const user = await signInWithLoginAndPassword(normalizedIdentifier, password);
+      const session = await signInWithSupabaseEmailAndPassword(normalizedIdentifier, password);
       toast({
         title: 'Login bem-sucedido!',
-        description: `Bem-vindo, ${user.name}! Redirecionando...`,
+        description: `Bem-vindo, ${session.supabaseUser?.email || normalizedIdentifier}! Redirecionando...`,
       });
-      router.push('/dashboard');
+      if (session.isPlatformAdmin) return router.push('/admin');
+      if (session.tenantAccess?.canAccessTenant) return router.push('/clientes');
+      setStartupNotice('Login realizado, mas esta conta nao possui uma membership ativa em nenhuma empresa.');
+      setIsLoading(false);
     } catch (error: any) {
       toast({
         variant: 'destructive',
@@ -152,27 +113,9 @@ export default function LoginPage() {
     }
   };
 
-  const handleRegister = async (e: React.FormEvent) => {
-    e.preventDefault();
-    if (!newUser.name || !newUser.login || !newUser.password) {
-      toast({ variant: 'destructive', title: 'Campos obrigatorios', description: 'Por favor, preencha todos os campos.' });
-      return;
-    }
-    if (newUser.password.length < 6) {
-      toast({ variant: 'destructive', title: 'Senha muito curta', description: 'A senha deve ter pelo menos 6 caracteres.' });
-      return;
-    }
-
-    try {
-      await registerUser(newUser.name, newUser.login, newUser.password);
-      toast({ title: 'Usuario registrado com sucesso!', description: 'Agora voce pode fazer login com suas novas credenciais.' });
-      setIsRegisterOpen(false);
-      setNewUser({ name: '', login: '', password: '' });
-      setHasUsers(true);
-      setStartupError(null);
-    } catch (error: any) {
-      toast({ variant: 'destructive', title: 'Erro no Registro', description: error.message || 'Nao foi possivel registrar o usuario.' });
-    }
+  const handleRegister = (event: React.FormEvent) => {
+    event.preventDefault();
+    toast({ variant: 'destructive', title: 'Cadastro indisponivel', description: 'Usuarios SaaS devem ser criados por um administrador da empresa.' });
   };
 
   if (isLoading) {
@@ -239,6 +182,12 @@ export default function LoginPage() {
               <Button type="submit" className="w-full" disabled={isLoading}>
                 {isLoading ? 'Entrando...' : 'Login'}
               </Button>
+              <Button type="button" variant="link" className="w-full" onClick={async () => {
+                const email = window.prompt('Informe seu e-mail para recuperar a senha:');
+                if (!email) return;
+                await fetch('/api/auth/password/recovery', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ email }) });
+                toast({ title: 'Se o e-mail existir, enviaremos as instrucoes de recuperacao.' });
+              }}>Esqueci minha senha</Button>
             </form>
           ) : (
             <form onSubmit={handleRegister} className="space-y-4 pt-4">
