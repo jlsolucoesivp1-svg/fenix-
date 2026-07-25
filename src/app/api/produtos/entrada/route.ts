@@ -20,6 +20,19 @@ export async function POST(request: Request) {
       return context;
     }
 
+    const financialContext = await requireSaasPermission(
+      'accessFinancials',
+      'Modulo financeiro SaaS indisponivel para a sessao atual.',
+      'Voce nao tem permissao para criar a despesa desta entrada de estoque.'
+    );
+    if (financialContext instanceof NextResponse) {
+      return financialContext;
+    }
+
+    if (financialContext.companyId !== context.companyId || financialContext.userId !== context.userId) {
+      return NextResponse.json({ error: 'Contexto de tenant invalido para a entrada de estoque.' }, { status: 403 });
+    }
+
     const payload = (await request.json()) as StockEntryPayload;
     const itemId = payload.itemId?.trim();
     const entryId = payload.entryId?.trim();

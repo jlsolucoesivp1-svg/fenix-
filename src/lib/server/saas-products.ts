@@ -1,5 +1,5 @@
 import type { StockItem } from '@/types';
-import type { InventoryMovementRecord, ProductRecord } from '@/types/saas';
+import type { FinancialEntryRecord, InventoryMovementRecord, ProductRecord } from '@/types/saas';
 import { getSupabaseUserConfig } from './supabase-user';
 
 type SupabaseErrorPayload = {
@@ -9,8 +9,10 @@ type SupabaseErrorPayload = {
 
 const PRODUCTS_SELECT_FIELDS =
   'id,company_id,name,description,category,stock_quantity,sale_price,cost_price,min_stock_quantity,barcode,unit_name,is_active';
+const FINANCIAL_ENTRY_SELECT_FIELDS =
+  'id,company_id,entry_type,description,amount,transaction_date,due_date,status,category,payment_method,related_sale_id,related_service_order_id,related_stock_entry_key,origin,created_by_user_id,metadata,created_at,updated_at';
 
-const buildUrl = (table: 'products' | 'inventory_movements', params: Record<string, string>) => {
+const buildUrl = (table: 'products' | 'inventory_movements' | 'financial_entries', params: Record<string, string>) => {
   const { url } = getSupabaseUserConfig();
   const searchParams = new URLSearchParams(params);
   return `${url}/rest/v1/${table}?${searchParams.toString()}`;
@@ -205,7 +207,7 @@ export const registerSaasStockEntry = async (params: {
 }): Promise<{ duplicated: boolean; updatedStock: StockItem[] }> => {
   const existingMovementResponse = await fetch(
     buildUrl('inventory_movements', {
-      select: 'id',
+      select: 'id,product_id,quantity_delta,unit_cost,created_at',
       company_id: `eq.${params.companyId}`,
       movement_key: `eq.${params.entryId}`,
       limit: '1',
@@ -221,8 +223,93 @@ export const registerSaasStockEntry = async (params: {
     throw new Error(await parseErrorMessage(existingMovementResponse));
   }
 
-  const existingMovements = (await existingMovementResponse.json()) as Array<Pick<InventoryMovementRecord, 'id'>>;
-  if (existingMovements[0]) {
+  const existingMovements = (await existingMovementResponse.json()) as Array<
+    Pick<InventoryMovementRecord, 'id' | 'product_id' | 'quantity_delta' | 'unit_cost' | 'created_at'>
+  >;
+  const existingMovement = existingMovements[0];
+  if (existingMovement) {
+    const existingFinancialResponse = await fetch(
+      buildUrl('financial_entries', {
+        select: 'id',
+        company_id: `eq.${params.companyId}`,
+        related_stock_entry_key: `eq.${params.entryId}`,
+        limit: '1',
+      }),
+      {
+        method: 'GET',
+        headers: buildHeaders(params.accessToken),
+        cache: 'no-store',
+      }
+    );
+
+    if (!existingFinancialResponse.ok) {
+      throw new Error(await parseErrorMessage(existingFinancialResponse));
+    }
+
+    const existingFinancialEntries = (await existingFinancialResponse.json()) as Array<Pick<FinancialEntryRecord, 'id'>>;
+    if (!existingFinancialEntries[0]) {
+      const productResponse = await fetch(
+        buildUrl('products', {
+          select: 'id,name',
+          id: `eq.${existingMovement.product_id}`,
+          company_id: `eq.${params.companyId}`,
+          limit: '1',
+        }),
+        {
+          method: 'GET',
+          headers: buildHeaders(params.accessToken),
+          cache: 'no-store',
+        }
+      );
+
+      if (!productResponse.ok) {
+        throw new Error(await parseErrorMessage(productResponse));
+      }
+
+      const products = (await productResponse.json()) as Array<Pick<ProductRecord, 'id' | 'name'>>;
+      const product = products[0];
+      if (!product) {
+        throw new Error('Produto da entrada de estoque existente nao foi encontrado.');
+      }
+
+      const unitCost = toNumber(existingMovement.unit_cost);
+      const financialEntryResponse = await fetch(
+        buildUrl('financial_entries', { select: 'id' }),
+        {
+          method: 'POST',
+          headers: buildHeaders(params.accessToken, true),
+          body: JSON.stringify({
+            id: `FIN-STOCK-${params.entryId}`,
+            company_id: params.companyId,
+            entry_type: 'despesa',
+            description: `Compra de estoque - ${product.name}`,
+            amount: Number((toNumber(existingMovement.quantity_delta) * unitCost).toFixed(2)),
+            transaction_date: existingMovement.created_at.split('T')[0],
+            due_date: null,
+            status: 'pago',
+            category: 'Compra de Mercadoria',
+            payment_method: 'Pendente',
+            related_sale_id: null,
+            related_service_order_id: null,
+            related_stock_entry_key: params.entryId,
+            origin: 'stock-entry',
+            created_by_user_id: params.authUserId,
+            metadata: {
+              product_id: existingMovement.product_id,
+              inventory_movement_key: params.entryId,
+              quantity: toNumber(existingMovement.quantity_delta),
+              unit_cost: unitCost,
+            },
+          }),
+          cache: 'no-store',
+        }
+      );
+
+      if (!financialEntryResponse.ok) {
+        throw new Error(await parseErrorMessage(financialEntryResponse));
+      }
+    }
+
     return {
       duplicated: true,
       updatedStock: await listSaasProducts(params.accessToken),
@@ -301,6 +388,43 @@ export const registerSaasStockEntry = async (params: {
 
   if (!movementResponse.ok) {
     throw new Error(await parseErrorMessage(movementResponse));
+  }
+
+  const totalCost = Number((params.quantity * params.cost).toFixed(2));
+  const financialEntryResponse = await fetch(
+    buildUrl('financial_entries', { select: FINANCIAL_ENTRY_SELECT_FIELDS }),
+    {
+      method: 'POST',
+      headers: buildHeaders(params.accessToken, true),
+      body: JSON.stringify({
+        id: `FIN-STOCK-${params.entryId}`,
+        company_id: params.companyId,
+        entry_type: 'despesa',
+        description: `Compra de estoque - ${currentProduct.name}`,
+        amount: totalCost,
+        transaction_date: new Date().toISOString().split('T')[0],
+        due_date: null,
+        status: 'pago',
+        category: 'Compra de Mercadoria',
+        payment_method: 'Pendente',
+        related_sale_id: null,
+        related_service_order_id: null,
+        related_stock_entry_key: params.entryId,
+        origin: 'stock-entry',
+        created_by_user_id: params.authUserId,
+        metadata: {
+          product_id: params.itemId,
+          inventory_movement_key: params.entryId,
+          quantity: params.quantity,
+          unit_cost: params.cost,
+        },
+      }),
+      cache: 'no-store',
+    }
+  );
+
+  if (!financialEntryResponse.ok) {
+    throw new Error(await parseErrorMessage(financialEntryResponse));
   }
 
   return {

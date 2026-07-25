@@ -181,7 +181,7 @@ function ProductsComponent() {
           title: result.duplicated ? 'Entrada ja registrada' : 'Entrada registrada!',
           description: result.duplicated
             ? 'A operacao ja havia sido processada anteriormente.'
-            : `${quantity} unidade(s) adicionada(s) ao estoque${product ? ` para ${product.name}` : ''}.`,
+            : `${quantity} unidade(s) adicionada(s) ao estoque e despesa financeira registrada${product ? ` para ${product.name}` : ''}.`,
         });
       } else {
         const result = await registrarDespesaEntradaEstoque({ itemId, quantity, cost, entryId });
