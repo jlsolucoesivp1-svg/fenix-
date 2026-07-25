@@ -447,23 +447,77 @@ const createAuthUser = async (params: {
   activeCompanyId: string;
 }) => {
   const { url } = getSupabaseAdminConfig();
-  const response = await fetch(`${url}/auth/v1/admin/users`, {
+  const authUsersUrl = `${url}/auth/v1/admin/users`;
+  const authPayload = {
+    email: params.email,
+    password: params.password,
+    email_confirm: true,
+    user_metadata: {
+      full_name: params.name,
+    },
+    app_metadata: {
+      active_company_id: params.activeCompanyId,
+      login_name: params.login,
+    },
+  };
+  const response = await fetch(authUsersUrl, {
     method: 'POST',
     headers: buildAdminHeaders(),
-    body: JSON.stringify({
-      email: params.email,
-      password: params.password,
-      email_confirm: true,
-      user_metadata: {
-        full_name: params.name,
-      },
-      app_metadata: {
-        active_company_id: params.activeCompanyId,
-        login_name: params.login,
-      },
-    }),
+    body: JSON.stringify(authPayload),
     cache: 'no-store',
   });
+
+  if (!response.ok) {
+    const responseBody = await response.text();
+    const responseHeaders = Object.fromEntries(
+      [
+        'content-type',
+        'content-length',
+        'date',
+        'server',
+        'x-request-id',
+        'x-sb-request-id',
+        'x-vercel-id',
+        'cf-ray',
+        'retry-after',
+        'ratelimit-limit',
+        'ratelimit-remaining',
+        'ratelimit-reset',
+      ].flatMap((name) => {
+        const value = response.headers.get(name);
+        return value ? [[name, value]] : [];
+      })
+    );
+    let errorPayload: unknown = responseBody;
+
+    try {
+      errorPayload = JSON.parse(responseBody);
+    } catch {
+      // Keep non-JSON error bodies available to diagnose the failed request.
+    }
+
+    console.error('[saas-users:create-auth-user] Supabase Auth recusou a criacao de usuario', {
+      request: {
+        url: authUsersUrl,
+        ...authPayload,
+        password: '[REDACTED]',
+      },
+      response: {
+        status: response.status,
+        statusText: response.statusText,
+        headers: responseHeaders,
+        body: errorPayload,
+      },
+    });
+
+    const message =
+      typeof errorPayload === 'object' && errorPayload !== null
+        ? ((errorPayload as { message?: string; error?: string; msg?: string }).message ||
+          (errorPayload as { message?: string; error?: string; msg?: string }).error ||
+          (errorPayload as { message?: string; error?: string; msg?: string }).msg)
+        : null;
+    throw new Error(message || `Falha na operacao (${response.status}).`);
+  }
 
   const payload = await parseJsonResponse<AuthAdminUserResponse>(response);
   const user = payload.user?.id ? payload.user : payload.id ? payload : null;
