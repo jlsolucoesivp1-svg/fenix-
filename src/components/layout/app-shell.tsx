@@ -13,7 +13,6 @@ import {
 import { BrowserSessionGuard } from '@/components/layout/browser-session-guard';
 import { HeaderActions } from '@/components/layout/header-actions';
 import { SupabaseModuleGuard } from '@/components/layout/supabase-module-guard';
-import { TenantAccessBanner } from '@/components/layout/tenant-access-banner';
 import { Logo } from '@/components/logo';
 import { MainNav } from '@/components/main-nav';
 
@@ -42,7 +41,6 @@ export function AppShell({ children }: { children: React.ReactNode }) {
             </div>
           </header>
           <SidebarInset>
-            <TenantAccessBanner />
             {children}
           </SidebarInset>
         </div>
