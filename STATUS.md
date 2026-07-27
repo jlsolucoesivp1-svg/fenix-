@@ -11,6 +11,7 @@ Atualizado em 2026-07-27 (America/Sao_Paulo).
 - O banner visual de diagnostico de tenant foi removido do AppShell para deixar a interface final limpa.
 - A integracao Estoque -> Financeiro foi concluida e validada manualmente no Preview.
 - O cadastro de produto com estoque inicial agora reutiliza o mesmo fluxo de "Registrar Entrada", sem duplicar regras de movimento ou financeiro.
+- A finalizacao de venda SaaS passou a ser totalmente transacional em uma unica RPC PostgreSQL.
 
 ### Problemas resolvidos
 
@@ -87,6 +88,15 @@ Status: concluida.
 - A despesa financeira correspondente e criada automaticamente em `financial_entries`.
 - A validacao manual no Preview foi concluida com sucesso.
 
+## Finalizacao transacional de vendas SaaS
+
+Status: concluida e validada.
+
+- Toda a gravacao de venda SaaS ocorre em uma unica RPC PostgreSQL (`finalize_saas_sale`).
+- Usuario, `company_id`, permissoes, estoque, cliente, pagamento e valores sao validados antes da primeira gravacao.
+- Nao ha mais risco de gravacao parcial entre venda, itens, estoque, `inventory_movements` e `financial_entries`.
+- Testes aprovados: venda normal; estoque insuficiente; usuario sem permissao financeira; cliente de outra empresa; desconto invalido.
+
 ## Proxima prioridade
 
 Validar o ciclo E2E final de autenticacao no Preview: criacao de usuario, login, alteracao de senha, logout, novo login e recuperacao de senha.
@@ -99,7 +109,7 @@ Validar o ciclo E2E final de autenticacao no Preview: criacao de usuario, login,
 | Multiempresa | Validado manualmente com criacao e acesso de empresas. |
 | Isolamento de dados | Validado manualmente; isolamento entre empresas funcionando corretamente. |
 | Usuarios | Fluxo migrado para e-mail como identidade; validar ciclo completo de criacao e login no Preview. |
-| Financeiro | Vendas, recebimentos, isolamento entre tenants e despesa automatica de compra de estoque validados. |
+| Financeiro | Vendas, recebimentos, isolamento entre tenants, despesa automatica de compra de estoque e finalizacao transacional de vendas validados. |
 | Estoque | Cadastro com estoque inicial e entrada manual atualizam estoque, registram movimento e geram despesa financeira. |
 | Interface | Banner de diagnostico SaaS removido; AppShell limpo. |
 | Modulos ja validados | Empresas, administrador, login, clientes, vendas, recebimentos financeiros, estoque x financeiro, logout e isolamento multiempresa. |
@@ -114,6 +124,7 @@ Validar o ciclo E2E final de autenticacao no Preview: criacao de usuario, login,
 - Branch atual: `rescue-saas-20260722`.
 - `d5d26b7 debug(stock): instrument financial entry creation`.
 - `7bec781 feat(stock): reuse stock entry flow on product creation`.
+- `4a34e23 feat(sales): make SaaS sale finalization fully transactional`.
 - Preview mais recente: `https://fenix-saas-ban3qtx2b-jlsolucoesivp1-3372s-projects.vercel.app`.
 
 ## Pendencias atuais
