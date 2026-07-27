@@ -34,6 +34,11 @@ const buildUrl = (
   return `${url}/rest/v1/${table}?${searchParams.toString()}`;
 };
 
+const buildRpcUrl = (functionName: string) => {
+  const { url } = getSupabaseUserConfig();
+  return `${url}/rest/v1/rpc/${functionName}`;
+};
+
 const buildHeaders = (accessToken: string, preferRepresentation = false) => {
   const { anonKey } = getSupabaseUserConfig();
   return {
@@ -308,8 +313,6 @@ export const finalizeSaasSale = async (params: {
   }
 
   const sanitizedItems = sanitizeSaleItems(params.items);
-  const currentStock = await listSaasProducts(params.accessToken);
-  const updatedStock = applySaleToStock(currentStock, sanitizedItems);
   const sale = buildSaleRecord({
     saleId: params.saleId,
     items: sanitizedItems,
@@ -329,111 +332,35 @@ export const finalizeSaasSale = async (params: {
     installments: params.installments?.enabled ? params.installments : undefined,
   });
 
-  const touchedStockItems = updatedStock.filter((item) =>
-    sanitizedItems.some((saleItem) => saleItem.id === item.id && saleItem.id?.startsWith('PROD-'))
-  );
-
-  for (const stockItem of touchedStockItems) {
-    const response = await fetch(
-      buildUrl('products', {
-        select: PRODUCTS_SELECT_FIELDS,
-        id: `eq.${stockItem.id}`,
-        company_id: `eq.${params.companyId}`,
-      }),
-      {
-        method: 'PATCH',
-        headers: buildHeaders(params.accessToken, true),
-        body: JSON.stringify({ stock_quantity: stockItem.quantity }),
-        cache: 'no-store',
-      }
-    );
-
-    if (!response.ok) {
-      throw new Error(await parseErrorMessage(response));
-    }
-  }
-
-  const saleResponse = await fetch(
-    buildUrl('sales', { select: SALES_SELECT_FIELDS }),
-    {
-      method: 'POST',
-      headers: buildHeaders(params.accessToken, true),
-      body: JSON.stringify(mapSaleInput({ companyId: params.companyId, sale })),
-      cache: 'no-store',
-    }
-  );
-
-  if (!saleResponse.ok) {
-    throw new Error(await parseErrorMessage(saleResponse));
-  }
-
   const saleItemsPayload = mapSaleItemsInput({ companyId: params.companyId, sale });
-  if (saleItemsPayload.length > 0) {
-    const saleItemsResponse = await fetch(
-      buildUrl('sale_items', { select: 'id' }),
-      {
-        method: 'POST',
-        headers: buildHeaders(params.accessToken, true),
-        body: JSON.stringify(saleItemsPayload),
-        cache: 'no-store',
-      }
-    );
-
-    if (!saleItemsResponse.ok) {
-      throw new Error(await parseErrorMessage(saleItemsResponse));
-    }
-  }
-
   const financialEntriesPayload = mapFinancialEntriesInput({
     companyId: params.companyId,
     authUserId: params.authUserId,
     entries: newTransactions,
   });
-  if (financialEntriesPayload.length > 0) {
-    const financialEntriesResponse = await fetch(
-      buildUrl('financial_entries', { select: 'id' }),
-      {
-        method: 'POST',
-        headers: buildHeaders(params.accessToken, true),
-        body: JSON.stringify(financialEntriesPayload),
-        cache: 'no-store',
-      }
-    );
+  const finalizeResponse = await fetch(buildRpcUrl('finalize_saas_sale'), {
+    method: 'POST',
+    headers: buildHeaders(params.accessToken, true),
+    body: JSON.stringify({
+      p_company_id: params.companyId,
+      p_sale: mapSaleInput({ companyId: params.companyId, sale }),
+      p_items: saleItemsPayload,
+      p_financial_entries: financialEntriesPayload,
+      p_payment_method_code: params.paymentMethod,
+    }),
+    cache: 'no-store',
+  });
 
-    if (!financialEntriesResponse.ok) {
-      throw new Error(await parseErrorMessage(financialEntriesResponse));
-    }
+  if (!finalizeResponse.ok) {
+    throw new Error(await parseErrorMessage(finalizeResponse));
   }
 
-  const inventoryMovementsPayload = mapInventoryMovementsInput({
-    companyId: params.companyId,
-    authUserId: params.authUserId,
-    sale,
-    stockAfter: updatedStock,
-    movementType: 'sale',
-  });
-  if (inventoryMovementsPayload.length > 0) {
-    const inventoryResponse = await fetch(
-      buildUrl('inventory_movements', { select: 'id' }),
-      {
-        method: 'POST',
-        headers: buildHeaders(params.accessToken, true),
-        body: JSON.stringify(inventoryMovementsPayload),
-        cache: 'no-store',
-      }
-    );
-
-    if (!inventoryResponse.ok) {
-      throw new Error(await parseErrorMessage(inventoryResponse));
-    }
+  const finalizeResult = (await finalizeResponse.json()) as { duplicated?: boolean };
+  if (finalizeResult.duplicated) {
+    return finalizeSaasSale(params);
   }
 
-  await updateRelatedQuoteStatus({
-    accessToken: params.accessToken,
-    companyId: params.companyId,
-    quoteId: params.relatedQuoteId,
-    status: 'Vendido',
-  });
+  const updatedStock = await listSaasProducts(params.accessToken);
 
   return {
     duplicated: false,
