@@ -1,6 +1,6 @@
 import { NextResponse } from 'next/server';
 import type { StockItem } from '@/types';
-import { createSaasProduct, listSaasProducts } from '@/lib/server/saas-products';
+import { createSaasProduct, listSaasProducts, registerSaasStockEntry } from '@/lib/server/saas-products';
 import { requireSaasPermission } from '@/lib/server/saas-authz';
 
 const validateStockItemPayload = (payload: unknown): StockItem => {
@@ -61,13 +61,49 @@ export async function POST(request: Request) {
     }
 
     const item = validateStockItemPayload(await request.json());
+    const hasInitialStockEntry = item.quantity > 0 && item.costPrice > 0;
+
+    if (hasInitialStockEntry) {
+      const financialContext = await requireSaasPermission(
+        'accessFinancials',
+        'Modulo financeiro SaaS indisponivel para a sessao atual.',
+        'Voce nao tem permissao para criar a despesa da entrada inicial de estoque.'
+      );
+      if (financialContext instanceof NextResponse) {
+        return financialContext;
+      }
+
+      if (financialContext.companyId !== context.companyId || financialContext.userId !== context.userId) {
+        return NextResponse.json({ error: 'Contexto de tenant invalido para a entrada inicial de estoque.' }, { status: 403 });
+      }
+    }
+
     const product = await createSaasProduct({
       accessToken: context.accessToken,
       companyId: context.companyId,
-      item,
+      item: hasInitialStockEntry ? { ...item, quantity: 0 } : item,
     });
 
-    return NextResponse.json(product);
+    if (!hasInitialStockEntry) {
+      return NextResponse.json(product);
+    }
+
+    const entryResult = await registerSaasStockEntry({
+      accessToken: context.accessToken,
+      companyId: context.companyId,
+      authUserId: context.userId,
+      itemId: product.id,
+      quantity: item.quantity,
+      cost: item.costPrice,
+      entryId: `STOCK-ENTRY-${product.id}`,
+    });
+    const productWithInitialStock = entryResult.updatedStock.find((stockItem) => stockItem.id === product.id);
+
+    if (!productWithInitialStock) {
+      throw new Error('Produto criado, mas nao retornado apos a entrada inicial de estoque.');
+    }
+
+    return NextResponse.json(productWithInitialStock);
   } catch (error) {
     console.error('Erro ao criar produto SaaS:', error);
     return NextResponse.json(
