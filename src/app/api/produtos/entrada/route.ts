@@ -39,7 +39,7 @@ export async function POST(request: Request) {
     const quantity = Number(payload.quantity);
     const cost = Number(payload.cost);
 
-    if (!itemId || !entryId || !Number.isFinite(quantity) || quantity <= 0 || !Number.isFinite(cost) || cost < 0) {
+    if (!itemId || !entryId || !Number.isFinite(quantity) || quantity <= 0 || !Number.isFinite(cost) || cost <= 0) {
       return NextResponse.json({ error: 'Payload invalido para entrada de estoque SaaS.' }, { status: 400 });
     }
 
