@@ -273,39 +273,51 @@ export const registerSaasStockEntry = async (params: {
       }
 
       const unitCost = toNumber(existingMovement.unit_cost);
+      const financialEntryPayload = {
+        id: `FIN-STOCK-${params.entryId}`,
+        company_id: params.companyId,
+        entry_type: 'despesa',
+        description: `Compra de estoque - ${product.name}`,
+        amount: Number((toNumber(existingMovement.quantity_delta) * unitCost).toFixed(2)),
+        transaction_date: existingMovement.created_at.split('T')[0],
+        due_date: null,
+        status: 'pago',
+        category: 'Compra de Mercadoria',
+        payment_method: 'Pendente',
+        related_sale_id: null,
+        related_service_order_id: null,
+        related_stock_entry_key: params.entryId,
+        origin: 'stock-entry',
+        created_by_user_id: params.authUserId,
+        metadata: {
+          product_id: existingMovement.product_id,
+          inventory_movement_key: params.entryId,
+          quantity: toNumber(existingMovement.quantity_delta),
+          unit_cost: unitCost,
+        },
+      };
+      console.info('[stock-entry] financial_entries POST payload', financialEntryPayload);
       const financialEntryResponse = await fetch(
         buildUrl('financial_entries', { select: 'id' }),
         {
           method: 'POST',
           headers: buildHeaders(params.accessToken, true),
-          body: JSON.stringify({
-            id: `FIN-STOCK-${params.entryId}`,
-            company_id: params.companyId,
-            entry_type: 'despesa',
-            description: `Compra de estoque - ${product.name}`,
-            amount: Number((toNumber(existingMovement.quantity_delta) * unitCost).toFixed(2)),
-            transaction_date: existingMovement.created_at.split('T')[0],
-            due_date: null,
-            status: 'pago',
-            category: 'Compra de Mercadoria',
-            payment_method: 'Pendente',
-            related_sale_id: null,
-            related_service_order_id: null,
-            related_stock_entry_key: params.entryId,
-            origin: 'stock-entry',
-            created_by_user_id: params.authUserId,
-            metadata: {
-              product_id: existingMovement.product_id,
-              inventory_movement_key: params.entryId,
-              quantity: toNumber(existingMovement.quantity_delta),
-              unit_cost: unitCost,
-            },
-          }),
+          body: JSON.stringify(financialEntryPayload),
           cache: 'no-store',
         }
       );
 
+      const financialEntryResponseBody = await financialEntryResponse.clone().text();
+      console.info('[stock-entry] financial_entries POST response', {
+        status: financialEntryResponse.status,
+        body: financialEntryResponseBody,
+      });
+
       if (!financialEntryResponse.ok) {
+        console.error('[stock-entry] financial_entries POST failed', {
+          status: financialEntryResponse.status,
+          body: financialEntryResponseBody,
+        });
         throw new Error(await parseErrorMessage(financialEntryResponse));
       }
     }
@@ -391,39 +403,51 @@ export const registerSaasStockEntry = async (params: {
   }
 
   const totalCost = Number((params.quantity * params.cost).toFixed(2));
+  const financialEntryPayload = {
+    id: `FIN-STOCK-${params.entryId}`,
+    company_id: params.companyId,
+    entry_type: 'despesa',
+    description: `Compra de estoque - ${currentProduct.name}`,
+    amount: totalCost,
+    transaction_date: new Date().toISOString().split('T')[0],
+    due_date: null,
+    status: 'pago',
+    category: 'Compra de Mercadoria',
+    payment_method: 'Pendente',
+    related_sale_id: null,
+    related_service_order_id: null,
+    related_stock_entry_key: params.entryId,
+    origin: 'stock-entry',
+    created_by_user_id: params.authUserId,
+    metadata: {
+      product_id: params.itemId,
+      inventory_movement_key: params.entryId,
+      quantity: params.quantity,
+      unit_cost: params.cost,
+    },
+  };
+  console.info('[stock-entry] financial_entries POST payload', financialEntryPayload);
   const financialEntryResponse = await fetch(
     buildUrl('financial_entries', { select: FINANCIAL_ENTRY_SELECT_FIELDS }),
     {
       method: 'POST',
       headers: buildHeaders(params.accessToken, true),
-      body: JSON.stringify({
-        id: `FIN-STOCK-${params.entryId}`,
-        company_id: params.companyId,
-        entry_type: 'despesa',
-        description: `Compra de estoque - ${currentProduct.name}`,
-        amount: totalCost,
-        transaction_date: new Date().toISOString().split('T')[0],
-        due_date: null,
-        status: 'pago',
-        category: 'Compra de Mercadoria',
-        payment_method: 'Pendente',
-        related_sale_id: null,
-        related_service_order_id: null,
-        related_stock_entry_key: params.entryId,
-        origin: 'stock-entry',
-        created_by_user_id: params.authUserId,
-        metadata: {
-          product_id: params.itemId,
-          inventory_movement_key: params.entryId,
-          quantity: params.quantity,
-          unit_cost: params.cost,
-        },
-      }),
+      body: JSON.stringify(financialEntryPayload),
       cache: 'no-store',
     }
   );
 
+  const financialEntryResponseBody = await financialEntryResponse.clone().text();
+  console.info('[stock-entry] financial_entries POST response', {
+    status: financialEntryResponse.status,
+    body: financialEntryResponseBody,
+  });
+
   if (!financialEntryResponse.ok) {
+    console.error('[stock-entry] financial_entries POST failed', {
+      status: financialEntryResponse.status,
+      body: financialEntryResponseBody,
+    });
     throw new Error(await parseErrorMessage(financialEntryResponse));
   }
 

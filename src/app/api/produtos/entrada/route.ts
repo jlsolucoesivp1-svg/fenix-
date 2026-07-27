@@ -38,6 +38,18 @@ export async function POST(request: Request) {
     const entryId = payload.entryId?.trim();
     const quantity = Number(payload.quantity);
     const cost = Number(payload.cost);
+    const totalCost = Number((quantity * cost).toFixed(2));
+
+    console.info('[stock-entry] request received', {
+      itemId,
+      receivedQuantity: payload.quantity,
+      quantity,
+      receivedUnitCost: payload.cost,
+      unitCost: cost,
+      totalCost,
+      companyId: context.companyId,
+      entryId,
+    });
 
     if (!itemId || !entryId || !Number.isFinite(quantity) || quantity <= 0 || !Number.isFinite(cost) || cost <= 0) {
       return NextResponse.json({ error: 'Payload invalido para entrada de estoque SaaS.' }, { status: 400 });
@@ -55,7 +67,7 @@ export async function POST(request: Request) {
 
     return NextResponse.json(result);
   } catch (error) {
-    console.error('Erro ao registrar entrada de estoque SaaS:', error);
+    console.error('[stock-entry] request failed', { error });
     return NextResponse.json(
       { error: error instanceof Error ? error.message : 'Falha ao registrar entrada SaaS.' },
       { status: 500 }
