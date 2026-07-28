@@ -18,6 +18,7 @@ import { Button } from '@/components/ui/button';
 import { Card, CardContent, CardDescription, CardFooter, CardHeader, CardTitle } from '@/components/ui/card';
 import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
+import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
 import { ModuleLoadingState } from '@/components/ui/module-state';
 import { useCurrentAppSession } from '@/hooks/use-current-app-session';
 import { useToast } from '@/hooks/use-toast';
@@ -34,6 +35,7 @@ import {
 
 const DEFAULT_SETTINGS: AppSettings = {
   defaultWarrantyDays: 90,
+  receiptPrintFormat: 'a4',
 };
 
 const DEFAULT_COMPANY_INFO: CompanyInfo = {
@@ -433,6 +435,32 @@ function SaaSCompanySettingsPage() {
               />
               <p className="text-sm text-muted-foreground">
                 Este valor sera usado como padrao para servicos que nao tiverem garantia especifica.
+              </p>
+            </div>
+          </div>
+          <div className="rounded-lg border p-4">
+            <h3 className="mb-2 text-lg font-semibold">Comprovante de Venda</h3>
+            <div className="space-y-2">
+              <Label htmlFor="receiptPrintFormat">Formato padrao do comprovante de venda</Label>
+              <Select
+                value={settings.receiptPrintFormat}
+                onValueChange={(value) =>
+                  setSettings((previous) => ({
+                    ...previous,
+                    receiptPrintFormat: value === 'thermal_80mm' ? 'thermal_80mm' : 'a4',
+                  }))
+                }
+              >
+                <SelectTrigger id="receiptPrintFormat" className="max-w-sm">
+                  <SelectValue placeholder="Selecione o formato" />
+                </SelectTrigger>
+                <SelectContent>
+                  <SelectItem value="a4">A4</SelectItem>
+                  <SelectItem value="thermal_80mm">Termica 80 mm</SelectItem>
+                </SelectContent>
+              </Select>
+              <p className="text-sm text-muted-foreground">
+                O operador ainda pode escolher o outro formato ao imprimir uma venda.
               </p>
             </div>
           </div>

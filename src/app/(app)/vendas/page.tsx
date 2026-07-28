@@ -39,19 +39,11 @@ import {
 import {
   createTenantCustomer,
   finalizarVenda,
-  getCustomers,
-  getFinancialTransactions,
-  getSales,
-  getStock,
   listTenantCustomers,
   listTenantProducts,
-  saveCustomers,
-  saveFinancialTransactions,
-  saveSales,
-  saveStock,
 } from '@/lib/storage';
 import { useCurrentUser } from '@/hooks/use-current-user';
-import type { Sale, FinancialTransaction, SaleItem, Customer, StockItem } from '@/types';
+import type { Sale, SaleItem, Customer, StockItem } from '@/types';
 import { useToast } from '@/hooks/use-toast';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
 import { Textarea } from '@/components/ui/textarea';
@@ -63,8 +55,9 @@ import { Popover, PopoverContent, PopoverTrigger } from '@/components/ui/popover
 import { Calendar } from '@/components/ui/calendar';
 import { useCurrentAppSession } from '@/hooks/use-current-app-session';
 import { cn } from '@/lib/utils';
-import { getPosPaymentMethodLabel, POS_PAYMENT_METHOD_OPTIONS } from '@/lib/payment-methods';
+import { POS_PAYMENT_METHOD_OPTIONS } from '@/lib/payment-methods';
 import { searchTenantCustomers } from '@/lib/storage';
+import { searchTenantProducts } from '@/lib/storage';
 import { ModuleLoadingState } from '@/components/ui/module-state';
 
 export default function VendasPage() {
@@ -95,7 +88,7 @@ export default function VendasPage() {
   const [isInstallments, setIsInstallments] = React.useState(false);
   const [installmentsCount, setInstallmentsCount] = React.useState(2);
   const [firstDueDate, setFirstDueDate] = React.useState<Date | undefined>(addMonths(new Date(), 1));
-  const useSaasSales =
+  const hasSaasSalesSession =
     session.authSource === 'supabase-only' && session.tenantAccess?.canAccessTenant === true;
 
 
@@ -108,9 +101,8 @@ export default function VendasPage() {
 
     const loadData = async () => {
       try {
-        const [stockData, customersData] = await Promise.all(
-          useSaasSales ? [listTenantProducts(), listTenantCustomers()] : [getStock(), getCustomers()]
-        );
+        if (!hasSaasSalesSession) return;
+        const [stockData, customersData] = await Promise.all([listTenantProducts(), listTenantCustomers()]);
         if (cancelled) return;
 
         setStock(stockData);
@@ -131,7 +123,7 @@ export default function VendasPage() {
     return () => {
       cancelled = true;
     };
-  }, [session.isLoading, toast, useSaasSales]);
+  }, [hasSaasSalesSession, session.isLoading, toast]);
 
   React.useEffect(() => {
     if (paymentMethod !== 'parcelado') {
@@ -143,21 +135,11 @@ export default function VendasPage() {
   
   const addProductToSale = (productToAdd: Omit<SaleItem, 'id'> & { id?: string }) => {
     setSaleItems(prevItems => {
-        const existingItemById = productToAdd.id && productToAdd.id.startsWith('PROD-') ? prevItems.find(item => item.id === productToAdd.id) : undefined;
+        const existingItemById = productToAdd.productId ? prevItems.find(item => item.productId === productToAdd.productId) : undefined;
         
         if (existingItemById) {
             return prevItems.map(item =>
-                item.id === productToAdd.id
-                    ? { ...item, quantity: (item.quantity || 0) + (productToAdd.quantity || 1) }
-                    : item
-            );
-        }
-
-        const existingItemByName = prevItems.find(item => item.name.toLowerCase() === productToAdd.name.toLowerCase());
-        
-        if(existingItemByName) {
-          return prevItems.map(item =>
-                item.name.toLowerCase() === productToAdd.name.toLowerCase()
+                    item.productId === productToAdd.productId
                     ? { ...item, quantity: (item.quantity || 0) + (productToAdd.quantity || 1) }
                     : item
             );
@@ -174,7 +156,7 @@ export default function VendasPage() {
     
     if (product) {
         addProductToSale({
-            id: product.id,
+            productId: product.id,
             name: product.name,
             price: product.price,
             quantity: 1,
@@ -258,39 +240,19 @@ export default function VendasPage() {
     toast({ title: 'Venda Cancelada', description: 'Todos os itens foram removidos do carrinho.' });
   };
 
-  const shouldUseLegacySaleFallback = (error: unknown) => {
-    if (!(error instanceof Error)) {
-      return false;
-    }
-
-    return (
-      error.message.includes('Falha na requisicao: 404') ||
-      error.message.includes('Falha na requisicao: 405') ||
-      error.message.includes('Failed to fetch') ||
-      error.message.includes('Modulo de vendas SaaS indisponivel')
-    );
-  };
-  
     const handleSaveNewCustomer = async () => {
         if (!newCustomer.name) {
             toast({ variant: 'destructive', title: 'Nome obrigatório' });
             return;
         }
-        const customerToAdd: Customer = useSaasSales
-          ? await createTenantCustomer(newCustomer)
-          : { ...newCustomer, id: `CUST-${Date.now()}` };
-        if (useSaasSales) {
-          setCustomers((prev) => [...prev, customerToAdd].sort((a, b) => a.name.localeCompare(b.name)));
-        } else {
-          const updatedCustomers = [...customers, customerToAdd];
-          await saveCustomers(updatedCustomers);
-          setCustomers(updatedCustomers);
-        }
+        const customerToAdd: Customer = await createTenantCustomer(newCustomer);
+        setCustomers((prev) => [...prev, customerToAdd].sort((a, b) => a.name.localeCompare(b.name)));
         setSelectedCustomerId(customerToAdd.id);
         setIsAddCustomerOpen(false);
         toast({ title: 'Cliente adicionado!', description: `${customerToAdd.name} foi salvo.` });
     };
 
+  /* Legacy PDV persistence removed: sales now finalize only through the SaaS RPC.
   const processSaleLegacy = async (shouldPrint = false) => {
     if (saleItems.length === 0) {
         toast({ variant: 'destructive', title: 'Carrinho Vazio', description: 'Adicione produtos para finalizar a venda.' });
@@ -401,7 +363,7 @@ export default function VendasPage() {
     }
     
     resetSale();
-  };
+  }; */
 
   const processSale = async (shouldPrint = false) => {
     if (saleItems.length === 0) {
@@ -452,11 +414,6 @@ export default function VendasPage() {
 
       resetSale();
     } catch (error) {
-      if (!useSaasSales && shouldUseLegacySaleFallback(error)) {
-        await processSaleLegacy(shouldPrint);
-        return;
-      }
-
       toast({
         variant: 'destructive',
         title: 'Erro ao finalizar venda',
@@ -487,6 +444,10 @@ export default function VendasPage() {
         description="Preparando produtos, clientes e formas de pagamento."
       />
     );
+  }
+
+  if (!hasSaasSalesSession) {
+    return <ModuleLoadingState title="Sessao SaaS necessaria" description="O PDV exige uma sessao SaaS valida com empresa ativa. Nenhum dado legado sera utilizado." />;
   }
 
   return (
@@ -592,8 +553,7 @@ export default function VendasPage() {
               <div className="space-y-2">
                   <Label htmlFor="customer">Cliente (Opcional)</Label>
                   <div className="flex gap-2">
-                    {useSaasSales ? (
-                      <CustomerAutocomplete
+                    <CustomerAutocomplete
                         id="customer"
                         selectedCustomer={customers.find((c) => c.id === selectedCustomerId) ?? null}
                         onSelect={(customer) => setSelectedCustomerId(customer?.id)}
@@ -602,17 +562,6 @@ export default function VendasPage() {
                         emptyMessage="Nenhum cliente encontrado."
                         className="flex-1"
                       />
-                    ) : (
-                      <Select value={selectedCustomerId} onValueChange={setSelectedCustomerId}>
-                          <SelectTrigger>
-                              <SelectValue placeholder="Selecione um cliente" />
-                          </SelectTrigger>
-                          <SelectContent>
-                              <SelectItem value="none">Nenhum / Cliente Avulso</SelectItem>
-                              {customers.map(c => <SelectItem key={c.id} value={c.id}>{c.name}</SelectItem>)}
-                          </SelectContent>
-                      </Select>
-                    )}
                     <Button variant="outline" size="icon" onClick={() => setIsAddCustomerOpen(true)}><UserPlus /></Button>
                   </div>
               </div>
@@ -694,9 +643,10 @@ export default function VendasPage() {
     </div>
     <ManualAddItemDialog
         isOpen={isManualAddOpen}
-        stockItems={stock}
         onAddItem={(item) => addProductToSale({ ...item })}
         onOpenChange={setIsManualAddOpen}
+        searchFunction={searchTenantProducts}
+        addProductImmediately
     />
     <ChangeCalculatorDialog
         isOpen={isChangeCalcOpen}

@@ -48,7 +48,8 @@ const toNumber = (value: number | string | null | undefined) => {
 };
 
 const mapQuoteItem = (record: QuoteItemRecord): SaleItem => ({
-  id: record.item_ref || record.id,
+  id: String(record.id),
+  productId: record.item_ref || undefined,
   name: record.description,
   quantity: toNumber(record.quantity),
   price: toNumber(record.unit_price),

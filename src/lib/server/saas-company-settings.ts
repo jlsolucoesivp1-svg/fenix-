@@ -58,6 +58,7 @@ const mapBrandingRecord = (record: CompanyBrandingRecord): CompanyInfo => ({
 
 const mapSettingsRecord = (record: CompanySettingsRecord): AppSettings => ({
   defaultWarrantyDays: record.default_warranty_days,
+  receiptPrintFormat: record.receipt_print_format || 'a4',
 });
 
 const getCompanyCore = async (params: {
@@ -203,7 +204,7 @@ export const getSaasAppSettings = async (params: {
 }): Promise<AppSettings> => {
   const response = await fetch(
     buildUrl('company_settings', {
-      select: 'company_id,default_warranty_days,timezone,currency_code',
+      select: 'company_id,default_warranty_days,timezone,currency_code,receipt_print_format',
       company_id: `eq.${params.companyId}`,
       limit: '1',
     }),
@@ -221,7 +222,7 @@ export const getSaasAppSettings = async (params: {
   const rows = (await response.json()) as CompanySettingsRecord[];
   const record = rows[0];
   if (!record) {
-    return { defaultWarrantyDays: 90 };
+    return { defaultWarrantyDays: 90, receiptPrintFormat: 'a4' };
   }
 
   return mapSettingsRecord(record);
@@ -234,7 +235,7 @@ export const saveSaasAppSettings = async (params: {
 }): Promise<AppSettings> => {
   const response = await fetch(
     buildUrl('company_settings', {
-      select: 'company_id,default_warranty_days,timezone,currency_code',
+      select: 'company_id,default_warranty_days,timezone,currency_code,receipt_print_format',
       company_id: `eq.${params.companyId}`,
     }),
     {
@@ -243,6 +244,7 @@ export const saveSaasAppSettings = async (params: {
       body: JSON.stringify({
         company_id: params.companyId,
         default_warranty_days: params.settings.defaultWarrantyDays,
+        receipt_print_format: params.settings.receiptPrintFormat,
       }),
       cache: 'no-store',
     }

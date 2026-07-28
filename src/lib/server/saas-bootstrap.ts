@@ -562,6 +562,7 @@ const ensureCompanySettings = async (companyId: string, settings: AppSettings | 
     {
       company_id: companyId,
       default_warranty_days: settings?.defaultWarrantyDays ?? 90,
+      receipt_print_format: settings?.receiptPrintFormat ?? 'a4',
       timezone: 'America/Sao_Paulo',
       currency_code: 'BRL',
     },

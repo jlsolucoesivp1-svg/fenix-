@@ -12,22 +12,22 @@ import {
 } from '@/components/ui/dialog';
 import { Input, CurrencyInput } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
-import { Popover, PopoverContent, PopoverTrigger } from '@/components/ui/popover';
 import type { SaleItem, StockItem } from '@/types';
-import { ChevronsUpDown } from 'lucide-react';
-import { LocalAutocomplete, highlightMatch } from '@/components/ui/local-autocomplete';
+import { ProductAutocomplete } from '@/components/sales/product-autocomplete';
+import { LocalAutocomplete } from '@/components/ui/local-autocomplete';
 
 interface ManualAddItemDialogProps {
   isOpen: boolean;
   onOpenChange: (isOpen: boolean) => void;
   onAddItem: (item: Omit<SaleItem, 'id'> & { id?: string }) => void;
   stockItems?: StockItem[];
+  searchFunction?: (query: string, limit: number) => Promise<StockItem[]>;
+  addProductImmediately?: boolean;
 }
 const initialItemState: Omit<SaleItem, 'id'> & { id?: string } = { name: '', price: 0, quantity: 1 };
 
-export function ManualAddItemDialog({ isOpen, onOpenChange, onAddItem, stockItems = [] }: ManualAddItemDialogProps) {
+export function ManualAddItemDialog({ isOpen, onOpenChange, onAddItem, stockItems = [], searchFunction, addProductImmediately = false }: ManualAddItemDialogProps) {
   const [item, setItem] = React.useState<Omit<SaleItem, 'id'> & { id?: string }>(initialItemState);
-  const [openCombobox, setOpenCombobox] = React.useState(false);
 
   React.useEffect(() => {
     if (isOpen) {
@@ -62,13 +62,17 @@ export function ManualAddItemDialog({ isOpen, onOpenChange, onAddItem, stockItem
   };
   
   const handleSelectProduct = (stockItem: StockItem) => {
+    if (addProductImmediately) {
+      onAddItem({ productId: stockItem.id, name: stockItem.name, price: stockItem.price, quantity: 1 });
+      onOpenChange(false);
+      return;
+    }
     setItem({
-        id: stockItem.id,
+        productId: stockItem.id,
         name: stockItem.name,
         price: stockItem.price,
         quantity: 1
     });
-    setOpenCombobox(false);
   }
 
   return (
@@ -83,38 +87,19 @@ export function ManualAddItemDialog({ isOpen, onOpenChange, onAddItem, stockItem
         <div className="grid gap-4 py-4">
           <div className="space-y-2">
             <Label htmlFor="search">Buscar Produto no Estoque</Label>
-             <Popover open={openCombobox} onOpenChange={setOpenCombobox}>
-                <PopoverTrigger asChild>
-                    <Button variant="outline" role="combobox" className="w-full justify-between font-normal">
-                        {item.name || "Selecione um produto..."}
-                        <ChevronsUpDown className="ml-2 h-4 w-4 shrink-0 opacity-50" />
-                    </Button>
-                </PopoverTrigger>
-                <PopoverContent className="w-[--radix-popover-trigger-width] p-0">
-                    <div className="p-2">
-                      <LocalAutocomplete
-                        items={stockItems}
-                        selectedItem={stockItems.find((stockItem) => stockItem.id === item.id) ?? null}
-                        onSelect={(stockItem) => {
-                          if (stockItem) {
-                            handleSelectProduct(stockItem);
-                          }
-                        }}
-                        getOption={(stockItem) => ({
-                          item: stockItem,
-                          value: stockItem.name,
-                          keywords: [stockItem.category || '', stockItem.barcode || ''],
-                        })}
-                        renderItem={(stockItem, query) => (
-                          <span className="block truncate">{highlightMatch(stockItem.name, query)}</span>
-                        )}
-                        placeholder="Buscar produto..."
-                        emptyMessage="Nenhum produto encontrado."
-                        inputClassName="border-0 shadow-none focus-visible:ring-0"
-                      />
-                    </div>
-                </PopoverContent>
-            </Popover>
+            {searchFunction ? (
+              <ProductAutocomplete onSelect={handleSelectProduct} searchFunction={searchFunction} />
+            ) : (
+              <LocalAutocomplete
+                items={stockItems}
+                selectedItem={null}
+                onSelect={(product) => product && handleSelectProduct(product)}
+                getOption={(product) => ({ item: product, value: product.name, keywords: [product.category || '', product.barcode || ''] })}
+                renderItem={(product) => <span>{product.name}</span>}
+                placeholder="Buscar produto..."
+                emptyMessage="Nenhum produto encontrado."
+              />
+            )}
           </div>
 
           <div className="space-y-2">

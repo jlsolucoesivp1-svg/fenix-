@@ -1,5 +1,5 @@
 import { NextResponse } from 'next/server';
-import type { AppSettings } from '@/types';
+import type { AppSettings, ReceiptPrintFormat } from '@/types';
 import { requireSaasPermission } from '@/lib/server/saas-authz';
 import {
   getSaasAppSettings,
@@ -13,13 +13,19 @@ const validateSettingsPayload = (payload: unknown): AppSettings => {
 
   const settings = payload as Partial<AppSettings>;
   const defaultWarrantyDays = Number(settings.defaultWarrantyDays);
+  const receiptPrintFormat = settings.receiptPrintFormat;
 
   if (!Number.isFinite(defaultWarrantyDays) || defaultWarrantyDays <= 0) {
     throw new Error('Prazo padrao de garantia invalido.');
   }
 
+  if (receiptPrintFormat !== 'a4' && receiptPrintFormat !== 'thermal_80mm') {
+    throw new Error('Formato padrao de comprovante invalido.');
+  }
+
   return {
     defaultWarrantyDays: Math.floor(defaultWarrantyDays),
+    receiptPrintFormat: receiptPrintFormat as ReceiptPrintFormat,
   };
 };
 

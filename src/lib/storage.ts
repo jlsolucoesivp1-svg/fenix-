@@ -65,6 +65,7 @@ const DEFAULT_COMPANY_INFO: CompanyInfo = {
 
 const DEFAULT_SETTINGS: AppSettings = {
   defaultWarrantyDays: 90,
+  receiptPrintFormat: 'a4',
 };
 
 let currentUserCache: User | null | undefined;
@@ -925,7 +926,7 @@ export const deleteTenantCustomer = async (customerId: string): Promise<void> =>
 
 export const searchTenantCustomers = async (name: string, limit = 10): Promise<CustomerSearchResult[]> => {
   const params = new URLSearchParams({
-    nome: name,
+    q: name,
     limit: String(limit),
     runtime: 'saas',
   });
@@ -1053,6 +1054,10 @@ export const getStock = async (): Promise<StockItem[]> => getCollection('stock')
 export const saveStock = async (stock: StockItem[]): Promise<void> => saveCollection('stock', stock);
 export const listTenantProducts = async (): Promise<StockItem[]> => {
   return apiFetch<StockItem[]>('/api/produtos');
+};
+export const searchTenantProducts = async (query: string, limit = 10): Promise<StockItem[]> => {
+  const params = new URLSearchParams({ q: query, limit: String(limit) });
+  return apiFetch<StockItem[]>(`/api/produtos/search?${params.toString()}`);
 };
 
 export const createTenantProduct = async (item: StockItem): Promise<StockItem> => {

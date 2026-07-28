@@ -9,7 +9,7 @@ const MAX_LIMIT = 15;
 export async function GET(request: Request) {
   try {
     const { searchParams } = new URL(request.url);
-    const nome = searchParams.get('nome') ?? '';
+    const nome = searchParams.get('q') ?? searchParams.get('nome') ?? '';
     const runtime = searchParams.get('runtime');
     const limitParam = Number(searchParams.get('limit') ?? '10');
     const limit = Number.isFinite(limitParam) ? Math.min(Math.max(limitParam, 1), MAX_LIMIT) : 10;

@@ -1,4 +1,4 @@
-import type { UserPermissions } from './index';
+import type { ReceiptPrintFormat, UserPermissions } from './index';
 
 export type TenantStatus = 'active' | 'inactive' | 'suspended' | 'trial';
 
@@ -107,6 +107,7 @@ export interface CompanySettingsRecord {
   default_warranty_days: number;
   timezone: string;
   currency_code: string;
+  receipt_print_format: ReceiptPrintFormat;
   plan_name?: string | null;
   internal_notes?: string | null;
   trial_starts_at?: string | null;

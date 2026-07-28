@@ -27,10 +27,12 @@ import {
   StickyNote,
   User,
 } from 'lucide-react';
-import type { CompanyInfo, Customer, Sale } from '@/types';
+import type { CompanyInfo, Customer, ReceiptPrintFormat, Sale } from '@/types';
 import { useToast } from '@/hooks/use-toast';
-import { getEffectiveCompanyInfo, getEffectiveCustomers } from '@/lib/storage';
-import { normalizeOptionalText, normalizeText } from '@/lib/text';
+import { getEffectiveCompanyInfo, getEffectiveCustomers, getEffectiveSettings } from '@/lib/storage';
+import { normalizeText } from '@/lib/text';
+import { buildA4SaleReceipt } from './a4-sale-receipt';
+import { buildThermalSaleReceipt } from './thermal-sale-receipt';
 
 interface SaleInvoiceDialogProps {
   isOpen: boolean;
@@ -54,36 +56,6 @@ const InfoItem = ({ icon: Icon, label, value }: { icon: React.ElementType; label
   </div>
 );
 
-const loadImageAsDataUrl = (url: string | undefined): Promise<string | null> => {
-  if (!url) {
-    return Promise.resolve(null);
-  }
-
-  return new Promise((resolve) => {
-    const img = new window.Image();
-    img.crossOrigin = 'Anonymous';
-    img.onload = () => {
-      const canvas = document.createElement('canvas');
-      canvas.width = img.width;
-      canvas.height = img.height;
-      const ctx = canvas.getContext('2d');
-
-      if (!ctx) {
-        resolve(null);
-        return;
-      }
-
-      ctx.drawImage(img, 0, 0);
-      resolve(canvas.toDataURL('image/png'));
-    };
-    img.onerror = () => {
-      console.warn(`Could not load image for PDF from: ${url}`);
-      resolve(null);
-    };
-    img.src = url;
-  });
-};
-
 const resolveSaleCustomer = (sale: Sale, customers: Customer[]): Customer | null => {
   if (sale.customerId) {
     const customerById = customers.find((customer) => customer.id === sale.customerId);
@@ -102,11 +74,8 @@ const resolveSaleCustomer = (sale: Sale, customers: Customer[]): Customer | null
 
 const getSaleCustomerRows = (sale: Sale, customer: Customer | null) => {
   const rows: Array<[string, string]> = [];
-  const customerName = sale.customerName || customer?.name;
-
-  if (customerName) {
-    rows.push(['Cliente', customerName]);
-  }
+  const customerName = sale.customerName || customer?.name || 'Consumidor Final';
+  rows.push(['Cliente', customerName]);
   if (customer?.document) {
     rows.push(['CPF/CNPJ', customer.document]);
   }
@@ -127,6 +96,7 @@ export function SaleInvoiceDialog({ isOpen, onOpenChange, sale }: SaleInvoiceDia
   const { toast } = useToast();
   const [companyInfo, setCompanyInfo] = React.useState<CompanyInfo | null>(null);
   const [customer, setCustomer] = React.useState<Customer | null>(null);
+  const [preferredPrintFormat, setPreferredPrintFormat] = React.useState<ReceiptPrintFormat>('a4');
 
   React.useEffect(() => {
     let isMounted = true;
@@ -135,13 +105,15 @@ export function SaleInvoiceDialog({ isOpen, onOpenChange, sale }: SaleInvoiceDia
       if (!isOpen || !sale) {
         setCompanyInfo(null);
         setCustomer(null);
+        setPreferredPrintFormat('a4');
         return;
       }
 
       try {
-        const [loadedCompanyInfo, loadedCustomers] = await Promise.all([
+        const [loadedCompanyInfo, loadedCustomers, loadedSettings] = await Promise.all([
           getEffectiveCompanyInfo(),
           getEffectiveCustomers(),
+          getEffectiveSettings(),
         ]);
         const normalizedSale = normalizeText(sale);
         const normalizedCompanyInfo = normalizeText(loadedCompanyInfo);
@@ -152,6 +124,7 @@ export function SaleInvoiceDialog({ isOpen, onOpenChange, sale }: SaleInvoiceDia
 
         setCompanyInfo(normalizedCompanyInfo);
         setCustomer(resolveSaleCustomer(normalizedSale, normalizedCustomers));
+        setPreferredPrintFormat(loadedSettings.receiptPrintFormat);
       } catch (error) {
         console.error(error);
         if (isMounted) {
@@ -171,16 +144,26 @@ export function SaleInvoiceDialog({ isOpen, onOpenChange, sale }: SaleInvoiceDia
     };
   }, [isOpen, sale, toast]);
 
-  const handlePrint = async () => {
+  const handlePrint = async (format: ReceiptPrintFormat) => {
     if (!sale) {
       toast({ variant: 'destructive', title: 'Erro', description: 'Nao ha dados da venda para imprimir.' });
       return;
     }
 
-    try {
-      const { jsPDF } = await import('jspdf');
-      await import('jspdf-autotable');
+    // Reserve the auxiliary window inside the click event. Opening it after async PDF
+    // generation causes Chrome and Edge to treat it as a pop-up instead of a print action.
+    const printWindow = window.open('', '_blank', 'popup=yes,width=860,height=760');
 
+    if (!printWindow) {
+      toast({
+        variant: 'destructive',
+        title: 'Janela de impressao bloqueada',
+        description: 'Permita pop-ups para imprimir o comprovante.',
+      });
+      return;
+    }
+
+    try {
       const normalizedSale = normalizeText(sale);
       const [loadedCompanyInfo, loadedCustomers] = await Promise.all([
         getEffectiveCompanyInfo(),
@@ -188,111 +171,25 @@ export function SaleInvoiceDialog({ isOpen, onOpenChange, sale }: SaleInvoiceDia
       ]);
       const activeCompanyInfo = companyInfo || normalizeText(loadedCompanyInfo);
       const activeCustomer = customer || resolveSaleCustomer(normalizedSale, normalizeText(loadedCustomers));
-      const customerRows = getSaleCustomerRows(normalizedSale, activeCustomer);
-      const logoDataUrl = await loadImageAsDataUrl(activeCompanyInfo.logoUrl);
 
-      const doc = new jsPDF();
-      const pageWidth = doc.internal.pageSize.getWidth();
-      const margin = 15;
-      let currentY = 20;
-      let textX = margin;
-
-      if (logoDataUrl) {
-        doc.addImage(logoDataUrl, 'PNG', margin, currentY - 8, 30, 30);
-        textX = margin + 35;
-      }
-
-      doc.setFont('helvetica', 'bold');
-      doc.setFontSize(20);
-      if (activeCompanyInfo.name) {
-        doc.text(normalizeOptionalText(activeCompanyInfo.name), textX, currentY);
-        currentY += 8;
-      }
-
-      doc.setFontSize(9);
-      doc.setFont('helvetica', 'normal');
-      if (activeCompanyInfo.address) {
-        doc.text(normalizeOptionalText(activeCompanyInfo.address), textX, currentY);
-        currentY += 4;
-      }
-      if (activeCompanyInfo.phone || activeCompanyInfo.emailOrSite) {
-        doc.text(
-          `Telefone: ${normalizeOptionalText(activeCompanyInfo.phone)} | E-mail: ${normalizeOptionalText(activeCompanyInfo.emailOrSite)}`,
-          textX,
-          currentY
+      if (format === 'thermal_80mm') {
+        printWindow.document.write(
+          buildThermalSaleReceipt({
+            sale: normalizedSale,
+            company: activeCompanyInfo,
+            customer: activeCustomer,
+          })
         );
+        printWindow.document.close();
+        return;
       }
-
-      const rightHeaderX = pageWidth - margin;
-      doc.setFontSize(14);
-      doc.setFont('helvetica', 'bold');
-      doc.text('Comprovante de Venda', rightHeaderX, currentY - 8, { align: 'right' });
-      doc.setFontSize(10);
-      doc.setFont('helvetica', 'normal');
-      doc.text(`Venda #${normalizedSale.id.slice(-6)}`, rightHeaderX, currentY - 2, { align: 'right' });
-      doc.text(`Data: ${formatDate(normalizedSale.date)} ${normalizedSale.time}`, rightHeaderX, currentY + 4, {
-        align: 'right',
-      });
-
-      currentY = 50;
-
-      if (customerRows.length > 0) {
-        doc.autoTable({
-          startY: currentY,
-          head: [['Dados do Cliente', 'Informacao']],
-          body: customerRows,
-          theme: 'grid',
-          styles: { fontSize: 9, cellPadding: 2, lineColor: [220, 220, 220] },
-          headStyles: { fillColor: '#0F172A', textColor: '#FFFFFF', fontStyle: 'bold' },
-          columnStyles: { 0: { cellWidth: 30, fontStyle: 'bold' } },
-        });
-        currentY = doc.lastAutoTable.finalY + 8;
-      }
-
-      doc.autoTable({
-        startY: currentY,
-        head: [['Vendedor', 'Forma de Pagamento']],
-        body: [[normalizedSale.user, normalizedSale.paymentMethod]],
-        theme: 'grid',
-        styles: { fontSize: 9, cellPadding: 2, lineColor: [220, 220, 220] },
-      });
-      currentY = doc.lastAutoTable.finalY + 8;
-
-      doc.autoTable({
-        startY: currentY,
-        head: [['Produto', 'Qtd.', 'Preco Unit.', 'Subtotal']],
-        body: normalizedSale.items.map((item) => [
-          item.name,
-          item.quantity,
-          `R$ ${item.price.toFixed(2)}`,
-          `R$ ${(item.price * item.quantity).toFixed(2)}`,
-        ]),
-        theme: 'striped',
-        headStyles: { fillColor: '#334155', textColor: '#FFFFFF', fontStyle: 'bold' },
-        footStyles: { fillColor: '#F1F5F9', textColor: '#000000', fontStyle: 'bold' },
-        foot: [
-          [{ content: 'Subtotal:', colSpan: 3, styles: { halign: 'right' } }, `R$ ${normalizedSale.subtotal.toFixed(2)}`],
-          [{ content: 'Desconto:', colSpan: 3, styles: { halign: 'right' } }, `- R$ ${normalizedSale.discount.toFixed(2)}`],
-          [{ content: 'Total Final:', colSpan: 3, styles: { halign: 'right' } }, `R$ ${normalizedSale.total.toFixed(2)}`],
-        ],
-      });
-      currentY = doc.lastAutoTable.finalY + 10;
-
-      if (normalizedSale.observations) {
-        doc.setFontSize(10);
-        doc.setFont('helvetica', 'bold');
-        doc.text('Observacoes:', margin, currentY);
-        currentY += 5;
-        doc.setFontSize(9);
-        doc.setFont('helvetica', 'normal');
-        const obsLines = doc.splitTextToSize(normalizedSale.observations, pageWidth - margin * 2);
-        doc.text(obsLines, margin, currentY);
-      }
-
-      doc.autoPrint();
-      doc.output('dataurlnewwindow');
+      printWindow.document.write(
+        buildA4SaleReceipt({ sale: normalizedSale, company: activeCompanyInfo, customer: activeCustomer })
+      );
+      printWindow.document.close();
     } catch (error) {
       console.error(error);
+      printWindow.close();
       toast({
         variant: 'destructive',
         title: 'Falha ao imprimir',
@@ -305,7 +202,7 @@ export function SaleInvoiceDialog({ isOpen, onOpenChange, sale }: SaleInvoiceDia
     return null;
   }
 
-  const customerName = sale.customerName || customer?.name;
+  const customerName = sale.customerName || customer?.name || 'Consumidor Final';
   const customerInfoRows = getSaleCustomerRows(sale, customer);
 
   return (
@@ -335,7 +232,7 @@ export function SaleInvoiceDialog({ isOpen, onOpenChange, sale }: SaleInvoiceDia
                 </div>
               )}
 
-              <div className="rounded-2xl border border-slate-200 bg-white p-5 shadow-sm">
+              <div className="rounded-2xl border border-border bg-card p-5 text-card-foreground shadow-sm">
                 <h3 className="mb-4 font-semibold">Informacoes Gerais</h3>
                 <div className="grid grid-cols-1 gap-x-2 gap-y-4 sm:grid-cols-2 md:grid-cols-4">
                   <InfoItem icon={User} label="Vendido por" value={sale.user} />
@@ -346,7 +243,7 @@ export function SaleInvoiceDialog({ isOpen, onOpenChange, sale }: SaleInvoiceDia
               </div>
 
               {customerInfoRows.length > 0 && (
-                <div className="rounded-2xl border border-slate-200 bg-white p-5 shadow-sm">
+                <div className="rounded-2xl border border-border bg-card p-5 text-card-foreground shadow-sm">
                   <h3 className="mb-4 font-semibold">Dados do Cliente</h3>
                   <div className="grid grid-cols-1 gap-x-2 gap-y-4 md:grid-cols-2 xl:grid-cols-3">
                     <InfoItem icon={User} label="Cliente" value={customerName} />
@@ -362,7 +259,7 @@ export function SaleInvoiceDialog({ isOpen, onOpenChange, sale }: SaleInvoiceDia
                 <h3 className="mb-2 flex items-center gap-2 font-semibold">
                   <ShoppingCart className="h-5 w-5" /> Itens Vendidos
                 </h3>
-                <div className="overflow-x-auto rounded-2xl border border-slate-200 bg-white shadow-sm">
+                <div className="overflow-x-auto rounded-2xl border border-border bg-card text-card-foreground shadow-sm">
                   <Table>
                     <TableHeader>
                       <TableRow>
@@ -386,7 +283,7 @@ export function SaleInvoiceDialog({ isOpen, onOpenChange, sale }: SaleInvoiceDia
                 </div>
               </div>
 
-              <div className="rounded-2xl border border-slate-200 bg-white p-4 shadow-sm">
+              <div className="rounded-2xl border border-border bg-card p-4 text-card-foreground shadow-sm">
                 <h3 className="mb-4 font-semibold">Resumo Financeiro</h3>
                 <div className="space-y-2">
                   <div className="flex items-center justify-between text-sm">
@@ -406,7 +303,7 @@ export function SaleInvoiceDialog({ isOpen, onOpenChange, sale }: SaleInvoiceDia
               </div>
 
               {sale.observations && (
-                <div className="rounded-2xl border border-slate-200 bg-white p-4 shadow-sm">
+                <div className="rounded-2xl border border-border bg-card p-4 text-card-foreground shadow-sm">
                   <h3 className="mb-2 flex items-center gap-2 font-semibold">
                     <StickyNote className="h-5 w-5" /> Observacoes
                   </h3>
@@ -417,14 +314,27 @@ export function SaleInvoiceDialog({ isOpen, onOpenChange, sale }: SaleInvoiceDia
           </ScrollArea>
         </div>
 
-        <DialogFooter className="border-t pt-4 sm:justify-between">
+        <DialogFooter className="border-t border-border pt-4 sm:justify-between">
           <Button variant="outline" onClick={() => onOpenChange(false)}>
             Fechar
           </Button>
-          <Button onClick={handlePrint} disabled={sale.status === 'Estornada'}>
-            <Printer className="mr-2 h-4 w-4" />
-            Imprimir Fatura
-          </Button>
+          <div className="flex flex-col gap-2 sm:flex-row">
+            <Button onClick={() => void handlePrint(preferredPrintFormat)} disabled={sale.status === 'Estornada'}>
+              <Printer className="h-4 w-4" />
+              <span>
+                {preferredPrintFormat === 'thermal_80mm' ? 'Imprimir Termica 80 mm' : 'Imprimir A4'}
+                <span className="ml-2 text-xs font-normal text-primary-foreground/80">Padrao</span>
+              </span>
+            </Button>
+            <Button
+              variant="outline"
+              onClick={() => void handlePrint(preferredPrintFormat === 'a4' ? 'thermal_80mm' : 'a4')}
+              disabled={sale.status === 'Estornada'}
+            >
+              <Printer className="h-4 w-4" />
+              {preferredPrintFormat === 'thermal_80mm' ? 'Imprimir A4' : 'Imprimir Termica 80 mm'}
+            </Button>
+          </div>
         </DialogFooter>
       </DialogContent>
     </Dialog>

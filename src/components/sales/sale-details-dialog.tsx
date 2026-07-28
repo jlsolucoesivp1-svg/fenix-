@@ -68,11 +68,8 @@ const resolveSaleCustomer = (sale: Sale, customers: Customer[]): Customer | null
 
 const getSaleCustomerRows = (sale: Sale, customer: Customer | null) => {
   const rows: Array<[string, string]> = [];
-  const customerName = sale.customerName || customer?.name;
-
-  if (customerName) {
-    rows.push(['Cliente', customerName]);
-  }
+  const customerName = sale.customerName || customer?.name || 'Consumidor Final';
+  rows.push(['Cliente', customerName]);
   if (customer?.document) {
     rows.push(['CPF/CNPJ', customer.document]);
   }
@@ -257,7 +254,7 @@ export function SaleDetailsDialog({ isOpen, onOpenChange, sale }: SaleDetailsDia
     return null;
   }
 
-  const customerName = sale.customerName || customer?.name;
+  const customerName = sale.customerName || customer?.name || 'Consumidor Final';
   const customerInfoRows = getSaleCustomerRows(sale, customer);
 
   return (

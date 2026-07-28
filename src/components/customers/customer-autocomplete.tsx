@@ -65,6 +65,7 @@ export function CustomerAutocomplete({
   const [highlightedIndex, setHighlightedIndex] = React.useState(-1);
   const containerRef = React.useRef<HTMLDivElement | null>(null);
   const cacheRef = React.useRef(new Map<string, CustomerSearchResult[]>());
+  const requestSequenceRef = React.useRef(0);
 
   React.useEffect(() => {
     setQuery(selectedCustomer?.name ?? '');
@@ -87,6 +88,7 @@ export function CustomerAutocomplete({
   React.useEffect(() => {
     const trimmedQuery = query.trim();
     if (!trimmedQuery) {
+      requestSequenceRef.current += 1;
       setResults([]);
       setIsLoading(false);
       setHighlightedIndex(-1);
@@ -94,6 +96,7 @@ export function CustomerAutocomplete({
     }
 
     const timer = window.setTimeout(async () => {
+      const requestSequence = ++requestSequenceRef.current;
       const cacheKey = `${trimmedQuery.toLowerCase()}::${limit}`;
       const cached = cacheRef.current.get(cacheKey);
       if (cached) {
@@ -105,15 +108,17 @@ export function CustomerAutocomplete({
       setIsLoading(true);
       try {
         const nextResults = await searchFunction(trimmedQuery, limit);
+        if (requestSequence !== requestSequenceRef.current) return;
         cacheRef.current.set(cacheKey, nextResults);
         setResults(nextResults);
         setHighlightedIndex(nextResults.length > 0 ? 0 : -1);
       } catch (error) {
+        if (requestSequence !== requestSequenceRef.current) return;
         console.error('Erro ao pesquisar clientes:', error);
         setResults([]);
         setHighlightedIndex(-1);
       } finally {
-        setIsLoading(false);
+        if (requestSequence === requestSequenceRef.current) setIsLoading(false);
       }
     }, DEBOUNCE_MS);
 

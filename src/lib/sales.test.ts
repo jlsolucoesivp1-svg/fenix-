@@ -88,6 +88,22 @@ describe('sales', () => {
     expect(transactions[0].relatedSaleId).toBe('SALE-1');
   });
 
+  it('keeps the customer optional and identifies a counter sale in the financial entry', () => {
+    const sale = buildSaleRecord({
+      saleId: 'SALE-WALK-IN',
+      items: [{ id: 'PROD-1', name: 'Tela', quantity: 1, price: 100 }],
+      discount: 0,
+      paymentMethod: 'dinheiro',
+      userName: 'Atendente',
+      now: new Date('2026-07-11T13:30:00'),
+    });
+    const transactions = buildSaleFinancialTransactions({ sale, paymentMethod: 'dinheiro' });
+
+    expect(sale.customerId).toBeUndefined();
+    expect(sale.customerName).toBeUndefined();
+    expect(transactions[0].description).toContain('Cliente: Consumidor Final');
+  });
+
   it('builds installment transactions with due dates', () => {
     vi.useFakeTimers();
     vi.setSystemTime(new Date('2026-07-11T13:30:00'));

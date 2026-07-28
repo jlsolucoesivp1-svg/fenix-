@@ -31,15 +31,11 @@ import { Badge } from '@/components/ui/badge';
 import { Switch } from '@/components/ui/switch';
 import { getUsers, saveUsers, getCompanyInfo, saveCompanyInfo, saveSettings, getSettings, getSales, getQuotes, getAppointments, getFinancialTransactions, saveSales, saveQuotes, saveAppointments, saveFinancialTransactions, getCustomers, saveCustomers, getServiceOrders, saveServiceOrders, getKits, saveKits, getStock, saveStock, restoreBackup } from '@/lib/storage';
 import { useCurrentUser } from '@/hooks/use-current-user';
-import type { User, CompanyInfo, UserPermissions } from '@/types';
+import type { AppSettings, User, CompanyInfo, UserPermissions } from '@/types';
 import Image from 'next/image';
 import { ScrollArea } from '@/components/ui/scroll-area';
 import { Checkbox } from '@/components/ui/checkbox';
 import { Separator } from '@/components/ui/separator';
-
-interface AppSettings {
-  defaultWarrantyDays: number;
-}
 
 const initialNewUser: Partial<User> = {
   name: '',
@@ -69,7 +65,7 @@ const defaultPermissions: UserPermissions = initialNewUser.permissions as UserPe
 export default function ConfiguracoesPage() {
   const { toast } = useToast();
   const { user: currentUser } = useCurrentUser();
-  const [settings, setSettings] = React.useState<AppSettings>({ defaultWarrantyDays: 90 });
+  const [settings, setSettings] = React.useState<AppSettings>({ defaultWarrantyDays: 90, receiptPrintFormat: 'a4' });
   const [companyInfo, setCompanyInfo] = React.useState<CompanyInfo>({ name: '', address: '', phone: '', emailOrSite: '', document: '', logoUrl: '', pixKey: '', notificationSoundUrl: '' });
   const [users, setUsers] = React.useState<User[]>([]);
   const [isLoading, setIsLoading] = React.useState(true);
@@ -260,7 +256,7 @@ export default function ConfiguracoesPage() {
         saveKits([]),
         saveStock([]),
         saveCompanyInfo({} as CompanyInfo),
-        saveSettings({ defaultWarrantyDays: 90 })
+        saveSettings({ defaultWarrantyDays: 90, receiptPrintFormat: 'a4' })
       ];
       await Promise.all(savePromises);
       

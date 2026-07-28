@@ -103,7 +103,7 @@ export const searchSaasCustomersByName = async (
     buildCustomersUrl({
       select: 'id,full_name,phone_1',
       is_active: 'eq.true',
-      full_name: `ilike.*${trimmedName}*`,
+      or: `(full_name.ilike.*${trimmedName}*,phone_1.ilike.*${trimmedName}*,document_number.ilike.*${trimmedName}*,email.ilike.*${trimmedName}*)`,
       order: 'full_name.asc',
       limit: safeLimit,
     }),

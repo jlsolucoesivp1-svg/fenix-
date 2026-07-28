@@ -67,7 +67,8 @@ export type StockItem = {
 
 // Represents a line item in a sale, not a stock item.
 export type SaleItem = {
-  id: string; // Could be the stock item ID or a temporary ID for manual items
+  id: string;
+  productId?: string;
   name: string;
   quantity: number;
   price: number;
@@ -207,6 +208,8 @@ export type ServiceOrderFileSummary = {
 
 export type CompanyAssetKind = 'logo' | 'notification-sound' | 'brand-media';
 
+export type ReceiptPrintFormat = 'a4' | 'thermal_80mm';
+
 export type CompanyAssetSummary = {
   path: string;
   name: string;
@@ -240,6 +243,7 @@ export type OSPayment = {
 export interface AppSettings {
   id?: number; // Optional because it's a singleton in the DB
   defaultWarrantyDays: number;
+  receiptPrintFormat: ReceiptPrintFormat;
 }
 
 export type ServiceOrderViewMetadata = {

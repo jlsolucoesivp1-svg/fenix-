@@ -100,6 +100,25 @@ export const listSaasProducts = async (accessToken: string): Promise<StockItem[]
   return rows.map(mapProductRecord);
 };
 
+export const searchSaasProducts = async (accessToken: string, companyId: string, query: string, limit: number): Promise<StockItem[]> => {
+  const trimmedQuery = query.trim();
+  if (!trimmedQuery) return [];
+  const safeLimit = String(Math.min(Math.max(limit, 1), 15));
+  const response = await fetch(
+    buildUrl('products', {
+      select: PRODUCTS_SELECT_FIELDS,
+      company_id: `eq.${companyId}`,
+      is_active: 'eq.true',
+      or: `(name.ilike.*${trimmedQuery}*,category.ilike.*${trimmedQuery}*,barcode.ilike.*${trimmedQuery}*)`,
+      order: 'name.asc',
+      limit: safeLimit,
+    }),
+    { method: 'GET', headers: buildHeaders(accessToken), cache: 'no-store' }
+  );
+  if (!response.ok) throw new Error(await parseErrorMessage(response));
+  return ((await response.json()) as ProductRecord[]).map(mapProductRecord);
+};
+
 export const createSaasProduct = async (params: {
   accessToken: string;
   companyId: string;

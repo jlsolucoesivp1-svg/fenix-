@@ -69,7 +69,8 @@ const toNumber = (value: number | string | null | undefined) => {
 };
 
 const mapSaleItem = (record: SaleItemRecord): SaleItem => ({
-  id: record.product_id || record.legacy_item_id || String(record.id),
+  id: record.legacy_item_id || `ITEM-${record.id}`,
+  productId: record.product_id || undefined,
   name: record.item_name,
   quantity: toNumber(record.quantity),
   price: toNumber(record.unit_price),
@@ -132,7 +133,7 @@ const mapSaleItemsInput = (params: { companyId: string; sale: Sale }) =>
     company_id: params.companyId,
     sale_id: params.sale.id,
     legacy_item_id: normalizeOptionalText(item.id),
-    product_id: item.id?.startsWith('PROD-') ? item.id : null,
+    product_id: normalizeOptionalText(item.productId),
     item_name: item.name.trim(),
     quantity: toNumber(item.quantity),
     unit_price: toNumber(item.price),
@@ -171,15 +172,16 @@ const mapInventoryMovementsInput = (params: {
   movementType: 'sale' | 'sale_reversal';
 }) =>
   params.sale.items
-    .filter((item) => item.id?.startsWith('PROD-'))
+    .filter((item) => item.productId || item.id?.startsWith('PROD-'))
     .map((item) => {
-      const product = params.stockAfter.find((entry) => entry.id === item.id);
+      const productId = item.productId || item.id;
+      const product = params.stockAfter.find((entry) => entry.id === productId);
       const quantityDelta = params.movementType === 'sale' ? -Math.abs(item.quantity) : Math.abs(item.quantity);
 
       return {
         company_id: params.companyId,
-        product_id: item.id,
-        movement_key: `${params.sale.id}:${params.movementType}:${item.id}`,
+        product_id: productId,
+        movement_key: `${params.sale.id}:${params.movementType}:${productId}`,
         movement_type: params.movementType,
         quantity_delta: quantityDelta,
         unit_cost: null,

@@ -71,7 +71,8 @@ const mapSaleRecord = (record: SaleRecord, items: SaleItemRecord[]): Sale => ({
   items: items
     .filter((item) => item.sale_id === record.id)
     .map((item) => ({
-      id: item.product_id || item.legacy_item_id || String(item.id),
+      id: item.legacy_item_id || `ITEM-${item.id}`,
+      productId: item.product_id || undefined,
       name: item.item_name,
       quantity: toNumber(item.quantity),
       price: toNumber(item.unit_price),

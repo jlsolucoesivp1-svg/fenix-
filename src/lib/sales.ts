@@ -48,7 +48,7 @@ export const buildSaleDescription = ({
   total: number;
   saleDate: string;
 }) =>
-  `Cliente: ${customerName || 'Nao identificado'} | Produto(s): ${productNames} | Pagamento: ${paymentMethodLabel} | Valor Total: R$ ${total.toFixed(2)} | Data: ${saleDate}`;
+  `Cliente: ${customerName || 'Consumidor Final'} | Produto(s): ${productNames} | Pagamento: ${paymentMethodLabel} | Valor Total: R$ ${total.toFixed(2)} | Data: ${saleDate}`;
 
 export const buildSaleRecord = ({
   saleId,
@@ -86,8 +86,9 @@ export const applySaleToStock = (stock: StockItem[], items: SaleItem[]): StockIt
   const updatedStock = [...stock];
 
   items.forEach((saleItem) => {
-    if (saleItem.id && saleItem.id.startsWith('PROD-')) {
-      const stockIndex = updatedStock.findIndex((stockItem) => stockItem.id === saleItem.id);
+    const productId = saleItem.productId || (saleItem.id.startsWith('PROD-') ? saleItem.id : undefined);
+    if (productId) {
+      const stockIndex = updatedStock.findIndex((stockItem) => stockItem.id === productId);
       if (stockIndex !== -1) {
         updatedStock[stockIndex] = {
           ...updatedStock[stockIndex],
