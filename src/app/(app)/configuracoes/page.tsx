@@ -583,6 +583,15 @@ function SaaSCompanySettingsPage() {
 export default function ConfiguracoesPage() {
   const session = useCurrentAppSession();
 
+  if (session.isLoading) {
+    return (
+      <ModuleLoadingState
+        title="Carregando configuracoes"
+        description="Verificando a sessao e o contexto da empresa ativa."
+      />
+    );
+  }
+
   if (session.authSource === 'supabase-only' && session.tenantAccess?.canAccessTenant) {
     return <SaaSCompanySettingsPage />;
   }

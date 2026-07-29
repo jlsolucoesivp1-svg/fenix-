@@ -556,3 +556,11 @@ Build - First Load JS relevante: `/clientes` 315 kB, `/financeiro` 360 kB, `/orc
 - `npm.cmd run test -- --run`: aprovado (5 arquivos/20 testes).
 - `git diff --check`: aprovado.
 - Pendentes de sessao autenticada no Preview: DELETE de cliente sem movimentacoes; DELETE de cliente com movimentacoes (confirmar `ON DELETE SET NULL`); tentativa de DELETE de cliente de outra empresa (deve resultar em erro e nenhuma linha afetada). Este ambiente nao possui credenciais de duas empresas nem navegador autenticado para coletar status/corpo HTTP reais.
+
+## Correcao - carregamento da tela Configuracoes - 2026-07-29
+
+- **Causa:** `src/app/(app)/configuracoes/page.tsx` escolhia entre SaaS e legado antes do fim de `useCurrentAppSession()`. No primeiro render, `authSource` era `none`, montando temporariamente `LegacyConfiguracoesPage`, que chamava `/api/data/settings`, `/api/data/companyInfo` e `/api/data/users`. Em uma sessao SaaS, essas rotas legadas respondiam `401 {"error":"Nao autenticado."}`, e o componente legado exibia o toast generico.
+- **Correcao:** enquanto `session.isLoading` e verdadeiro, a pagina exibe somente `ModuleLoadingState`. Assim, os componentes SaaS e legado nao sao montados antes da sessao estar resolvida. A decisao existente entre SaaS e legado permanece inalterada depois do carregamento.
+- **Escopo preservado:** nenhuma mudanca em APIs, autenticacao, permissoes, memberships, RLS, `company_id` ou outros modulos.
+- **Arquivos alterados:** `src/app/(app)/configuracoes/page.tsx` e `STATUS.md`.
+- **Validacoes:** `npm.cmd run typecheck`, `npm.cmd run build` (76/76 paginas), `npm.cmd run test -- --run` (5 arquivos/20 testes) e `git diff --check`: aprovados.
