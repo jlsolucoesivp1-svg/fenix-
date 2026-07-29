@@ -1,6 +1,6 @@
 import { NextResponse } from 'next/server';
 import type { StockItem } from '@/types';
-import { createSaasProduct, listSaasProducts, registerSaasStockEntry } from '@/lib/server/saas-products';
+import { createSaasProduct, listSaasProducts, listSaasProductsPage, registerSaasStockEntry } from '@/lib/server/saas-products';
 import { requireSaasPermission } from '@/lib/server/saas-authz';
 
 const validateStockItemPayload = (payload: unknown): StockItem => {
@@ -27,7 +27,7 @@ const validateStockItemPayload = (payload: unknown): StockItem => {
   };
 };
 
-export async function GET() {
+export async function GET(request: Request) {
   try {
     const context = await requireSaasPermission(
       'accessInventory',
@@ -38,6 +38,17 @@ export async function GET() {
       return context;
     }
 
+    const searchParams = new URL(request.url).searchParams;
+    if (searchParams.get('paginated') === 'true') {
+      const requestedPage = Number(searchParams.get('page') ?? '1');
+      const products = await listSaasProductsPage({
+        accessToken: context.accessToken,
+        companyId: context.companyId,
+        page: Number.isFinite(requestedPage) ? Math.max(Math.floor(requestedPage), 1) : 1,
+        search: searchParams.get('search') ?? '',
+      });
+      return NextResponse.json(products);
+    }
     const products = await listSaasProducts(context.accessToken);
     return NextResponse.json(products);
   } catch (error) {

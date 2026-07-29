@@ -2,6 +2,16 @@ import type { Customer, CustomerSearchResult } from '@/types';
 import type { CustomerRecord } from '@/types/saas';
 import { getSupabaseUserConfig } from './supabase-user';
 
+export const SAAS_CUSTOMERS_PAGE_SIZE = 20;
+
+export type SaasCustomersPage = {
+  items: Customer[];
+  page: number;
+  pageSize: number;
+  total: number;
+  totalPages: number;
+};
+
 type SupabaseErrorPayload = {
   message?: string;
   error?: string;
@@ -86,6 +96,60 @@ export const listSaasCustomers = async (accessToken: string): Promise<Customer[]
 
   const rows = (await response.json()) as CustomerRecord[];
   return rows.map(mapCustomerRecord);
+};
+
+const normalizeSearchTerm = (value: string) => value.trim().replace(/[(),]/g, ' ');
+
+const parseTotalCount = (contentRange: string | null) => {
+  const total = Number(contentRange?.split('/').at(-1));
+  return Number.isFinite(total) && total >= 0 ? total : 0;
+};
+
+export const listSaasCustomersPage = async (params: {
+  accessToken: string;
+  companyId: string;
+  page: number;
+  pageSize?: number;
+  search?: string;
+}): Promise<SaasCustomersPage> => {
+  const pageSize = Math.min(Math.max(params.pageSize ?? SAAS_CUSTOMERS_PAGE_SIZE, 1), SAAS_CUSTOMERS_PAGE_SIZE);
+  const page = Math.max(Math.floor(params.page) || 1, 1);
+  const search = normalizeSearchTerm(params.search || '');
+  const query: Record<string, string> = {
+    select: CUSTOMERS_SELECT_FIELDS,
+    company_id: `eq.${params.companyId}`,
+    is_active: 'eq.true',
+    order: 'full_name.asc',
+    limit: String(pageSize),
+    offset: String((page - 1) * pageSize),
+  };
+
+  if (search) {
+    query.or = `(full_name.ilike.*${search}*,document_number.ilike.*${search}*,phone_1.ilike.*${search}*,email.ilike.*${search}*)`;
+  }
+
+  const response = await fetch(buildCustomersUrl(query), {
+    method: 'GET',
+    headers: {
+      ...buildHeaders(params.accessToken),
+      Prefer: 'count=exact',
+    },
+    cache: 'no-store',
+  });
+
+  if (!response.ok) {
+    throw new Error(await parseErrorMessage(response));
+  }
+
+  const rows = (await response.json()) as CustomerRecord[];
+  const total = parseTotalCount(response.headers.get('content-range'));
+  return {
+    items: rows.map(mapCustomerRecord),
+    page,
+    pageSize,
+    total,
+    totalPages: Math.max(Math.ceil(total / pageSize), 1),
+  };
 };
 
 export const searchSaasCustomersByName = async (

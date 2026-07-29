@@ -2,6 +2,9 @@ import type { Quote, SaleItem } from '@/types';
 import type { QuoteItemRecord, QuoteRecord } from '@/types/saas';
 import { getSupabaseUserConfig } from './supabase-user';
 
+export const SAAS_QUOTES_PAGE_SIZE = 20;
+export type SaasQuotesPage = { items: Quote[]; page: number; pageSize: number; total: number; totalPages: number };
+
 type SupabaseErrorPayload = {
   message?: string;
   error?: string;
@@ -151,6 +154,33 @@ export const listSaasQuotes = async (accessToken: string): Promise<Quote[]> => {
   const quoteItemRows = (await quoteItemsResponse.json()) as QuoteItemRecord[];
 
   return quoteRows.map((record) => mapQuoteRecord(record, quoteItemRows));
+};
+
+export const listSaasQuotesPage = async (params: { accessToken: string; companyId: string; page: number; search?: string; status?: string }): Promise<SaasQuotesPage> => {
+  const page = Math.max(Math.floor(params.page) || 1, 1);
+  const search = (params.search || '').trim().replace(/[(),]/g, ' ');
+  const query: Record<string, string> = {
+    select: QUOTES_SELECT_FIELDS,
+    company_id: `eq.${params.companyId}`,
+    order: 'quote_date.desc,quote_time.desc',
+    limit: String(SAAS_QUOTES_PAGE_SIZE),
+    offset: String((page - 1) * SAAS_QUOTES_PAGE_SIZE),
+  };
+  if (params.status && params.status !== 'todos') query.status = `eq.${params.status}`;
+  if (search) query.or = `(customer_name.ilike.*${search}*,id.ilike.*${search}*)`;
+  const quotesResponse = await fetch(buildUrl('quotes', query), { method: 'GET', headers: { ...buildHeaders(params.accessToken), Prefer: 'count=exact' }, cache: 'no-store' });
+  if (!quotesResponse.ok) throw new Error(await parseErrorMessage(quotesResponse));
+  const quoteRows = (await quotesResponse.json()) as QuoteRecord[];
+  const quoteIds = quoteRows.map((quote) => quote.id);
+  let quoteItemRows: QuoteItemRecord[] = [];
+  if (quoteIds.length) {
+    const itemsResponse = await fetch(buildUrl('quote_items', { select: QUOTE_ITEMS_SELECT_FIELDS, company_id: `eq.${params.companyId}`, quote_id: `in.(${quoteIds.join(',')})`, order: 'quote_id.asc,id.asc' }), { method: 'GET', headers: buildHeaders(params.accessToken), cache: 'no-store' });
+    if (!itemsResponse.ok) throw new Error(await parseErrorMessage(itemsResponse));
+    quoteItemRows = (await itemsResponse.json()) as QuoteItemRecord[];
+  }
+  const total = Number(quotesResponse.headers.get('content-range')?.split('/').at(-1));
+  const safeTotal = Number.isFinite(total) && total >= 0 ? total : 0;
+  return { items: quoteRows.map((quote) => mapQuoteRecord(quote, quoteItemRows)), page, pageSize: SAAS_QUOTES_PAGE_SIZE, total: safeTotal, totalPages: Math.max(Math.ceil(safeTotal / SAAS_QUOTES_PAGE_SIZE), 1) };
 };
 
 export const upsertSaasQuote = async (params: {

@@ -28,6 +28,7 @@ import {
     listTenantKits,
     listTenantProducts,
     listTenantQuotes,
+    listTenantQuotesPage,
     saveCustomers,
     saveFinancialTransactions,
     saveQuotes,
@@ -144,9 +145,14 @@ interface QuoteTableProps {
     statusFilter: string;
     onStatusFilterChange: (value: string) => void;
     searchFilter: string;
+    page?: number;
+    total?: number;
+    totalPages?: number;
+    isPageLoading?: boolean;
+    onPageChange?: (page: number) => void;
 }
 
-function QuoteTable({ quotes, canConvertToSale, onEdit, onStatusChange, onConvertToSale, onDelete, onSearch, statusFilter, onStatusFilterChange, searchFilter }: QuoteTableProps) {
+function QuoteTable({ quotes, canConvertToSale, onEdit, onStatusChange, onConvertToSale, onDelete, onSearch, statusFilter, onStatusFilterChange, searchFilter, page, total, totalPages, isPageLoading, onPageChange }: QuoteTableProps) {
     const filteredQuotes = React.useMemo(() => {
         let result = [...quotes];
         if (statusFilter !== 'todos') {
@@ -294,6 +300,16 @@ function QuoteTable({ quotes, canConvertToSale, onEdit, onStatusChange, onConver
                         )}
                     </TableBody>
                 </Table>
+                {onPageChange && page && totalPages ? (
+                  <div className="mt-4 flex flex-wrap items-center justify-between gap-3 text-sm text-muted-foreground">
+                    <span>{isPageLoading ? 'Carregando orcamentos...' : `${total || 0} ${(total || 0) === 1 ? 'orcamento' : 'orcamentos'} no resultado`}</span>
+                    <div className="flex items-center gap-2">
+                      <Button variant="outline" size="sm" disabled={isPageLoading || page <= 1} onClick={() => onPageChange(page - 1)}>Anterior</Button>
+                      <span>Pagina {page} de {totalPages}</span>
+                      <Button variant="outline" size="sm" disabled={isPageLoading || page >= totalPages} onClick={() => onPageChange(page + 1)}>Proxima</Button>
+                    </div>
+                  </div>
+                ) : null}
             </CardContent>
         </Card>
     );
@@ -687,6 +703,10 @@ export default function OrcamentosPage() {
     const [searchFilter, setSearchFilter] = React.useState('');
     const [editingQuote, setEditingQuote] = React.useState<Quote | null>(null);
     const [loadError, setLoadError] = React.useState<string | null>(null);
+    const [page, setPage] = React.useState(1);
+    const [totalQuotes, setTotalQuotes] = React.useState(0);
+    const [totalPages, setTotalPages] = React.useState(1);
+    const [isPageLoading, setIsPageLoading] = React.useState(false);
     
     const useSaasQuotes =
       session.authSource === 'supabase-only' && session.tenantAccess?.canAccessTenant === true;
@@ -699,12 +719,21 @@ export default function OrcamentosPage() {
       void loadData();
     }, [session.isLoading, useSaasQuotes]);
 
-    const loadData = async () => {
+    const loadData = async (requestedPage = 1, nextSearch = searchFilter, nextStatus = statusFilter) => {
         try {
           setIsLoading(true);
           setLoadError(null);
-          const loadedQuotes = useSaasQuotes ? await listTenantQuotes() : await getQuotes();
-          setQuotes(loadedQuotes.sort((a, b) => new Date(b.date).getTime() - new Date(a.date).getTime()));
+          if (useSaasQuotes) {
+            setIsPageLoading(true);
+            const result = await listTenantQuotesPage({ page: requestedPage, search: nextSearch, status: nextStatus });
+            setQuotes(result.items);
+            setPage(result.page);
+            setTotalQuotes(result.total);
+            setTotalPages(result.totalPages);
+          } else {
+            const loadedQuotes = await getQuotes();
+            setQuotes(loadedQuotes.sort((a, b) => new Date(b.date).getTime() - new Date(a.date).getTime()));
+          }
         } catch (error) {
           const message = error instanceof Error ? error.message : 'Nao foi possivel carregar os orcamentos.';
           setLoadError(message);
@@ -715,6 +744,7 @@ export default function OrcamentosPage() {
           });
         } finally {
           setIsLoading(false);
+          setIsPageLoading(false);
         }
     };
 
@@ -912,10 +942,21 @@ export default function OrcamentosPage() {
             onStatusChange={handleQuickStatusChange}
             onConvertToSale={handleConvertToSale}
             onDelete={handleDeleteQuote}
-            onSearch={setSearchFilter}
+            onSearch={(value) => {
+              setSearchFilter(value);
+              if (useSaasQuotes) void loadData(1, value, statusFilter);
+            }}
             statusFilter={statusFilter}
-            onStatusFilterChange={setStatusFilter}
+            onStatusFilterChange={(value) => {
+              setStatusFilter(value);
+              if (useSaasQuotes) void loadData(1, searchFilter, value);
+            }}
             searchFilter={searchFilter}
+            page={useSaasQuotes ? page : undefined}
+            total={useSaasQuotes ? totalQuotes : undefined}
+            totalPages={useSaasQuotes ? totalPages : undefined}
+            isPageLoading={isPageLoading}
+            onPageChange={useSaasQuotes ? (nextPage) => void loadData(nextPage) : undefined}
         />
     );
 }

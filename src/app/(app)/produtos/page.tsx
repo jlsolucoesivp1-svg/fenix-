@@ -15,7 +15,7 @@ import {
   createTenantProduct,
   deleteTenantProduct,
   getStock,
-  listTenantProducts,
+  listTenantProductsPage,
   registerTenantStockEntry,
   registrarDespesaEntradaEstoque,
   salvarItemEstoqueComFinanceiro,
@@ -71,17 +71,30 @@ function ProductsComponent() {
   const [isPrintDialogOpen, setIsPrintDialogOpen] = React.useState(false);
   const [selectedItem, setSelectedItem] = React.useState<StockItem | null>(null);
   const [loadError, setLoadError] = React.useState<string | null>(null);
+  const [page, setPage] = React.useState(1);
+  const [totalProducts, setTotalProducts] = React.useState(0);
+  const [totalPages, setTotalPages] = React.useState(1);
+  const [isPageLoading, setIsPageLoading] = React.useState(false);
 
   const useSaasProducts =
     session.authSource === 'supabase-only' && session.tenantAccess?.canAccessTenant === true;
 
-  const loadStock = React.useCallback(async () => {
+  const loadStock = React.useCallback(async (requestedPage = 1) => {
     try {
       setIsLoading(true);
       setLoadError(null);
-      const stockData = useSaasProducts ? await listTenantProducts() : await getStock();
-      stockData.sort((a, b) => a.name.localeCompare(b.name));
-      setStock(stockData);
+      if (useSaasProducts) {
+        setIsPageLoading(true);
+        const result = await listTenantProductsPage({ page: requestedPage, search: searchTerm });
+        setStock(result.items);
+        setPage(result.page);
+        setTotalProducts(result.total);
+        setTotalPages(result.totalPages);
+      } else {
+        const stockData = await getStock();
+        stockData.sort((a, b) => a.name.localeCompare(b.name));
+        setStock(stockData);
+      }
     } catch (error) {
       const message = error instanceof Error ? error.message : 'Nao foi possivel carregar os produtos.';
       setLoadError(message);
@@ -92,30 +105,36 @@ function ProductsComponent() {
       });
     } finally {
       setIsLoading(false);
+      setIsPageLoading(false);
     }
-  }, [toast, useSaasProducts]);
+  }, [searchTerm, toast, useSaasProducts]);
 
   React.useEffect(() => {
     if (session.isLoading) {
       return;
     }
 
-    void loadStock();
-
     const openNew = searchParams.get('new');
     if (openNew === 'true') {
       handleEdit(null);
     }
-  }, [loadStock, searchParams, session.isLoading]);
+  }, [searchParams, session.isLoading]);
 
   const filteredStock = React.useMemo(() => {
+    if (useSaasProducts) return stock;
     return stock.filter(
       (item) =>
         item.name.toLowerCase().includes(searchTerm.toLowerCase()) ||
         item.barcode.toLowerCase().includes(searchTerm.toLowerCase()) ||
         item.category.toLowerCase().includes(searchTerm.toLowerCase())
     );
-  }, [searchTerm, stock]);
+  }, [searchTerm, stock, useSaasProducts]);
+
+  React.useEffect(() => {
+    if (!session.isLoading && useSaasProducts) {
+      void loadStock(1);
+    }
+  }, [loadStock, searchTerm, session.isLoading, useSaasProducts]);
 
   const handleEdit = (item: StockItem | null) => {
     setSelectedItem(item);
@@ -135,6 +154,7 @@ function ProductsComponent() {
           a.name.localeCompare(b.name)
         );
         setStock(updatedStock);
+        void loadStock(page);
         toast({
           title: 'Produto salvo!',
           description: `${savedItem.name} foi atualizado com sucesso no modulo SaaS.`,
@@ -177,6 +197,7 @@ function ProductsComponent() {
         const product = result.updatedStock.find((item) => item.id === itemId);
 
         setStock([...result.updatedStock].sort((a, b) => a.name.localeCompare(b.name)));
+        void loadStock(page);
         toast({
           title: result.duplicated ? 'Entrada ja registrada' : 'Entrada registrada!',
           description: result.duplicated
@@ -235,6 +256,7 @@ function ProductsComponent() {
         : 'O produto foi removido do estoque.',
       variant: 'destructive',
     });
+    if (useSaasProducts) void loadStock(page);
   };
 
   if (session.isLoading || isLoading) {
@@ -373,6 +395,16 @@ function ProductsComponent() {
               ) : null}
             </TableBody>
           </Table>
+          {useSaasProducts ? (
+            <div className="mt-4 flex flex-wrap items-center justify-between gap-3 text-sm text-muted-foreground">
+              <span>{isPageLoading ? 'Carregando produtos...' : `${totalProducts} ${totalProducts === 1 ? 'produto' : 'produtos'} no resultado`}</span>
+              <div className="flex items-center gap-2">
+                <Button variant="outline" size="sm" disabled={isPageLoading || page <= 1} onClick={() => void loadStock(page - 1)}>Anterior</Button>
+                <span>Pagina {page} de {totalPages}</span>
+                <Button variant="outline" size="sm" disabled={isPageLoading || page >= totalPages} onClick={() => void loadStock(page + 1)}>Proxima</Button>
+              </div>
+            </div>
+          ) : null}
         </CardContent>
       </Card>
 

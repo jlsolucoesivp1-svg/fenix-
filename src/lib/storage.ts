@@ -814,6 +814,28 @@ export const listTenantCustomers = async (): Promise<Customer[]> => {
   return apiFetch<Customer[]>('/api/clientes');
 };
 
+export type TenantCustomersPage = {
+  items: Customer[];
+  page: number;
+  pageSize: number;
+  total: number;
+  totalPages: number;
+};
+
+export const listTenantCustomersPage = async (params: {
+  page: number;
+  search?: string;
+}): Promise<TenantCustomersPage> => {
+  const query = new URLSearchParams({
+    paginated: 'true',
+    page: String(params.page),
+  });
+  if (params.search?.trim()) {
+    query.set('search', params.search.trim());
+  }
+  return apiFetch<TenantCustomersPage>(`/api/clientes?${query.toString()}`);
+};
+
 export const getEffectiveCompanyInfo = async (): Promise<CompanyInfo> => {
   const session = await getCurrentAppSession();
   if (session.authSource === 'supabase-only' && session.tenantAccess?.canAccessTenant) {
@@ -1054,6 +1076,18 @@ export const getStock = async (): Promise<StockItem[]> => getCollection('stock')
 export const saveStock = async (stock: StockItem[]): Promise<void> => saveCollection('stock', stock);
 export const listTenantProducts = async (): Promise<StockItem[]> => {
   return apiFetch<StockItem[]>('/api/produtos');
+};
+export type TenantProductsPage = {
+  items: StockItem[];
+  page: number;
+  pageSize: number;
+  total: number;
+  totalPages: number;
+};
+export const listTenantProductsPage = async (params: { page: number; search?: string }): Promise<TenantProductsPage> => {
+  const query = new URLSearchParams({ paginated: 'true', page: String(params.page) });
+  if (params.search?.trim()) query.set('search', params.search.trim());
+  return apiFetch<TenantProductsPage>(`/api/produtos?${query.toString()}`);
 };
 export const searchTenantProducts = async (query: string, limit = 10): Promise<StockItem[]> => {
   const params = new URLSearchParams({ q: query, limit: String(limit) });
@@ -1469,6 +1503,12 @@ export const getQuotes = async (): Promise<Quote[]> => getCollection('quotes');
 export const saveQuotes = async (quotes: Quote[]): Promise<void> => saveCollection('quotes', quotes);
 export const listTenantQuotes = async (): Promise<Quote[]> => {
   return apiFetch<Quote[]>('/api/orcamentos');
+};
+export type TenantQuotesPage = { items: Quote[]; page: number; pageSize: number; total: number; totalPages: number };
+export const listTenantQuotesPage = async (params: { page: number; search?: string; status?: string }): Promise<TenantQuotesPage> => {
+  const query = new URLSearchParams({ paginated: 'true', page: String(params.page), status: params.status || 'todos' });
+  if (params.search?.trim()) query.set('search', params.search.trim());
+  return apiFetch<TenantQuotesPage>(`/api/orcamentos?${query.toString()}`);
 };
 
 export const saveTenantQuote = async (quote: Quote): Promise<Quote> => {

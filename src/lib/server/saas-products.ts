@@ -2,6 +2,16 @@ import type { StockItem } from '@/types';
 import type { FinancialEntryRecord, InventoryMovementRecord, ProductRecord } from '@/types/saas';
 import { getSupabaseUserConfig } from './supabase-user';
 
+export const SAAS_PRODUCTS_PAGE_SIZE = 20;
+
+export type SaasProductsPage = {
+  items: StockItem[];
+  page: number;
+  pageSize: number;
+  total: number;
+  totalPages: number;
+};
+
 type SupabaseErrorPayload = {
   message?: string;
   error?: string;
@@ -98,6 +108,47 @@ export const listSaasProducts = async (accessToken: string): Promise<StockItem[]
 
   const rows = (await response.json()) as ProductRecord[];
   return rows.map(mapProductRecord);
+};
+
+const normalizeProductSearch = (value: string) => value.trim().replace(/[(),]/g, ' ');
+
+export const listSaasProductsPage = async (params: {
+  accessToken: string;
+  companyId: string;
+  page: number;
+  pageSize?: number;
+  search?: string;
+}): Promise<SaasProductsPage> => {
+  const pageSize = Math.min(Math.max(params.pageSize ?? SAAS_PRODUCTS_PAGE_SIZE, 1), SAAS_PRODUCTS_PAGE_SIZE);
+  const page = Math.max(Math.floor(params.page) || 1, 1);
+  const search = normalizeProductSearch(params.search || '');
+  const query: Record<string, string> = {
+    select: PRODUCTS_SELECT_FIELDS,
+    company_id: `eq.${params.companyId}`,
+    is_active: 'eq.true',
+    order: 'name.asc',
+    limit: String(pageSize),
+    offset: String((page - 1) * pageSize),
+  };
+  if (search) {
+    query.or = `(name.ilike.*${search}*,category.ilike.*${search}*,barcode.ilike.*${search}*)`;
+  }
+  const response = await fetch(buildUrl('products', query), {
+    method: 'GET',
+    headers: { ...buildHeaders(params.accessToken), Prefer: 'count=exact' },
+    cache: 'no-store',
+  });
+  if (!response.ok) throw new Error(await parseErrorMessage(response));
+  const rows = (await response.json()) as ProductRecord[];
+  const total = Number(response.headers.get('content-range')?.split('/').at(-1));
+  const safeTotal = Number.isFinite(total) && total >= 0 ? total : 0;
+  return {
+    items: rows.map(mapProductRecord),
+    page,
+    pageSize,
+    total: safeTotal,
+    totalPages: Math.max(Math.ceil(safeTotal / pageSize), 1),
+  };
 };
 
 export const searchSaasProducts = async (accessToken: string, companyId: string, query: string, limit: number): Promise<StockItem[]> => {

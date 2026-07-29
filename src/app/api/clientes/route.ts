@@ -1,6 +1,11 @@
 import { NextResponse } from 'next/server';
 import type { Customer } from '@/types';
-import { createSaasCustomer, listSaasCustomers } from '@/lib/server/saas-customers';
+import {
+  createSaasCustomer,
+  listSaasCustomers,
+  listSaasCustomersPage,
+  SAAS_CUSTOMERS_PAGE_SIZE,
+} from '@/lib/server/saas-customers';
 import { requireSaasPermission } from '@/lib/server/saas-authz';
 
 const validateCustomerPayload = (payload: unknown): Omit<Customer, 'id'> => {
@@ -23,7 +28,7 @@ const validateCustomerPayload = (payload: unknown): Omit<Customer, 'id'> => {
   };
 };
 
-export async function GET() {
+export async function GET(request: Request) {
   try {
     const context = await requireSaasPermission(
       'accessClients',
@@ -34,7 +39,23 @@ export async function GET() {
       return context;
     }
 
-    const customers = await listSaasCustomers(context.accessToken);
+    const { searchParams } = new URL(request.url);
+    const paginated = searchParams.get('paginated') === 'true';
+    if (!paginated) {
+      const customers = await listSaasCustomers(context.accessToken);
+      return NextResponse.json(customers);
+    }
+
+    const pageParam = Number(searchParams.get('page') ?? '1');
+    const page = Number.isFinite(pageParam) ? Math.max(Math.floor(pageParam), 1) : 1;
+    const search = searchParams.get('search') ?? '';
+    const customers = await listSaasCustomersPage({
+      accessToken: context.accessToken,
+      companyId: context.companyId,
+      page,
+      pageSize: SAAS_CUSTOMERS_PAGE_SIZE,
+      search,
+    });
     return NextResponse.json(customers);
   } catch (error) {
     console.error('Erro ao listar clientes SaaS:', error);

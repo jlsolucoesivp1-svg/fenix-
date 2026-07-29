@@ -1,6 +1,6 @@
 import { NextResponse } from 'next/server';
 import type { Quote } from '@/types';
-import { listSaasQuotes, upsertSaasQuote } from '@/lib/server/saas-quotes';
+import { listSaasQuotes, listSaasQuotesPage, upsertSaasQuote } from '@/lib/server/saas-quotes';
 import { requireSaasPermission } from '@/lib/server/saas-authz';
 
 const validateQuotePayload = (payload: unknown): Quote => {
@@ -53,7 +53,7 @@ const validateQuotePayload = (payload: unknown): Quote => {
   };
 };
 
-export async function GET() {
+export async function GET(request: Request) {
   try {
     const context = await requireSaasPermission(
       'accessQuotes',
@@ -64,6 +64,11 @@ export async function GET() {
       return context;
     }
 
+    const query = new URL(request.url).searchParams;
+    if (query.get('paginated') === 'true') {
+      const requestedPage = Number(query.get('page') ?? '1');
+      return NextResponse.json(await listSaasQuotesPage({ accessToken: context.accessToken, companyId: context.companyId, page: Number.isFinite(requestedPage) ? Math.max(Math.floor(requestedPage), 1) : 1, search: query.get('search') ?? '', status: query.get('status') ?? 'todos' }));
+    }
     const quotes = await listSaasQuotes(context.accessToken);
     return NextResponse.json(quotes);
   } catch (error) {

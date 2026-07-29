@@ -1,6 +1,48 @@
 # Status do Projeto Fenix SaaS
 
-Atualizado em 2026-07-27 (America/Sao_Paulo).
+Atualizado em 2026-07-28 (America/Sao_Paulo).
+
+## Auditoria de seguranca multiempresa - 2026-07-28
+
+### Escopo e resultado
+
+- Auditoria estatica concluida para migrations, 30 tabelas publicas, politicas RLS, funcoes SQL, Storage, 49 rotas de API, autenticacao/sessao, uso de `company_id` e dependencias de producao.
+- Nao foi encontrada quebra confirmada de isolamento entre empresas nas tabelas SaaS, APIs SaaS ou Storage: os acessos usam token do usuario, `company_id` da sessao ativa e RLS baseada em membership/permissao.
+- Nivel geral atual: **7/10**. O isolamento SaaS esta bem estruturado, mas ainda ha atualizacoes de dependencias de alto risco e testes de invasao com duas contas reais a executar.
+
+### Vulnerabilidades encontradas e correcoes
+
+1. **Media - tabelas legadas sem RLS explicita**
+   - Local: `public.app_records` e `public.app_singletons`.
+   - Risco: sao tabelas sem `company_id`; embora o papel `authenticated` nao tenha grants e o fluxo SaaS nao as use, a ausencia de RLS deixava uma defesa em profundidade incompleta contra futura exposicao pela Data API.
+   - Correcao: migration `20260728000014_harden_legacy_app_storage.sql`, aplicada no Supabase remoto, habilitou RLS e revogou todos os privilegios de `anon` e `authenticated`.
+
+2. **Critica/Alta - dependencias vulneraveis**
+   - `jspdf` (critica), `jspdf-autotable`, `postcss`, `patch-package` e cadeia transitiva foram atualizados para versoes corrigidas; `next` foi atualizado de `15.5.20` para `15.5.22` e `ngrok` saiu da beta `5.0.0-beta.2` para `4.3.3`.
+   - Resultado de `npm audit --omit=dev`: de **1 critica, 11 altas, 4 medias e 1 baixa** para **0 criticas, 9 altas e 2 medias**.
+   - Pendencia: os alertas restantes dependem principalmente de cadeia transitiva/upgrade maior do Next e do ngrok; nao foi executado `npm audit fix --force` para evitar migracao nao validada de framework durante auditoria de seguranca.
+
+### Controles confirmados
+
+- Todas as 30 tabelas publicas declaradas nas migrations agora possuem RLS habilitada. As tabelas SaaS possuem policies de `SELECT`/`INSERT`/`UPDATE`/`DELETE` com `company_id`, membership e permissao; `platform_admins` e as tabelas legadas nao possuem policies permissivas e nao concedem acesso a usuarios.
+- As funcoes `SECURITY DEFINER` de autorizacao usam `SET search_path = ''`, nao aceitam `company_id` sem revalidar membership e removem `EXECUTE` de `PUBLIC`.
+- A RPC `finalize_saas_sale` fixa `search_path`, exige `auth.uid()`, permissao e `company_id`, e revalida cliente, produto, quote e valores antes de gravar.
+- Os tres buckets privados possuem policies que obrigam o primeiro segmento do caminho a coincidir com `active_company_id` do JWT e exigem a permissao do modulo correspondente.
+- Service role permanece somente em modulos de servidor; rotas que o usam validam a sessao, tenant e permissao/identidade de Platform Admin antes da operacao.
+
+### Testes executados
+
+- Inventario automatico de RLS/policies das migrations: aprovado para 30/30 tabelas.
+- Revisao estatica de 49 rotas de API, funcoes de sessao, Storage e chamadas REST/RPC: sem acesso cruzado confirmado.
+- `npm.cmd run typecheck`: aprovado.
+- `npm.cmd run test -- --run`: aprovado, 20 testes.
+- `npm.cmd run build`: aprovado apos atualizacao de dependencias.
+- `npx.cmd supabase db push`: migration `20260728000014_harden_legacy_app_storage.sql` aplicada com sucesso.
+
+### Pendencias de seguranca
+
+- Executar teste E2E de IDOR com duas empresas e contas distintas, tentando leitura/escrita/exclusao cruzada em cada rota e bucket. Nao foi executado nesta sessao por nao haver duas credenciais de teste autenticadas disponiveis.
+- Planejar atualizacao maior do Next e revisar a cadeia do ngrok para eliminar os 9 alertas altos restantes do `npm audit`; nao aplicar `--force` sem ciclo de compatibilidade dedicado.
 
 ## Sessao 2026-07-28 - PDV: A4 e venda sem cliente
 
@@ -45,11 +87,11 @@ Atualizado em 2026-07-27 (America/Sao_Paulo).
 - `npm.cmd run typecheck`: **aprovado**.
 - `npm.cmd run build`: **aprovado** antes dos ajustes finais de exibicao no historico; os ajustes finais tambem passaram no `typecheck`.
 - `git diff --check`: **aprovado**.
-- Validacao manual E2E (venda sem cliente/com cliente, baixa de estoque, financeiro, historico, dialogos A4 e termico): **pendente**. O navegador integrado nao estava disponivel nesta sessao e nao foi possivel autenticar/operar o tenant real localmente; nao registrar como validado ate executar a checklist no Preview ou local autenticado.
+- Validacao manual E2E no Preview `https://fenix-saas-67cwj65zi-jlsolucoesivp1-3372s-projects.vercel.app`: **aprovada pelo usuario**. Foram confirmados: impressao A4, impressao termica, venda sem cliente como `Consumidor Final`, venda com cliente, cancelamento da impressao, historico, baixa de estoque e lancamento financeiro.
 
-### Pendencia objetiva para encerrar esta correcao
+### Situacao da correcao
 
-- Executar no tenant de teste a checklist manual solicitada: uma venda sem cliente e uma com cliente, verificando estoque, financeiro e historico; em ambas, testar A4 (abertura automatica, imprimir e cancelar) e termica. Nenhuma venda adicional deve ser criada ao escolher ou repetir a impressao.
+- Correcao validada manualmente no Preview pelo usuario. Nao ha pendencias conhecidas para A4, termica ou vendas sem cliente nesta etapa.
 
 ## Resumo do dia
 
@@ -316,3 +358,174 @@ Corrigir o contraste do modal do comprovante e concluir a validacao manual compl
 ---
 
 Atualizacao registrada em 2026-07-27 (America/Sao_Paulo). A proxima sessao deve retomar pelo contraste do modal do comprovante, pela experiencia de impressao e pela validacao manual completa dos dois formatos.
+
+## Auditoria de desempenho e velocidade - 2026-07-29
+
+### Escopo, metodo e limites
+
+- Auditoria estatica de front-end, 49 rotas de API, camada de sessao/autorizacao, consultas REST ao Supabase, migrations/indices, configuracao Next/Vercel e dependencias.
+- Medicoes executadas localmente: `npm.cmd run build` (build limpo), `npm.cmd run typecheck` e `npm.cmd audit --omit=dev --json` (somente informativo).
+- Lighthouse, waterfall de navegador, tempos autenticados, logs de Runtime Vercel e `EXPLAIN ANALYZE`/Database Advisor do Supabase nao foram executados: nao havia navegador disponivel, credenciais de teste nem acesso operacional aos dashboards nesta sessao. Esses dados continuam obrigatorios antes de afirmar tempos de producao.
+
+### Nota geral: 6,5/10
+
+O build e o typecheck estao saudaveis, os indices compostos principais ja existem e varias consultas independentes usam `Promise.all`. O principal risco de lentidao em empresas com base crescente e transferir tabelas completas para o navegador e recalcular sessao/permissoes repetidamente. A experiencia inicial tambem paga bundles elevados em modulos importantes.
+
+### Medicoes verificadas
+
+| Medicao | Antes | Depois | Resultado |
+| --- | --- | --- | --- |
+| Build Next | Falhou apos gerar 76/76 paginas: `ENOENT` ao mover `.next/export/500.html` | Cache `.next` regenerado; 53,1 s total | Aprovado |
+| Compilacao do build limpo | 22,6 s (tentativa com cache inconsistente) | 17,6 s | Aprovado |
+| Typecheck | Nao executado nesta auditoria antes da limpeza | Aprovado (`tsc --noEmit`) | Aprovado |
+| Lint | Script `next lint` abre assistente interativo; nao ha configuracao ESLint automatizavel | Pendente migrar para ESLint CLI | Bloqueado por configuracao |
+| `npm audit --omit=dev` | - | 0 critica, 12 altas, 11 medias | Informativo; nao e medicao de performance |
+
+Build - First Load JS relevante: `/clientes` 315 kB, `/financeiro` 360 kB, `/orcamentos` 321 kB, `/ordens-de-servico` 369 kB, `/laudos` 288 kB; compartilhado por todas as paginas: 103 kB. Dashboard: 186 kB; PDV: 203 kB; agenda: 112 kB (calendario ja dinamico).
+
+### Problemas criticos
+
+1. **Nenhum problema critico confirmado.** Nao houve alteracao de regras de negocio, autenticacao, isolamento, financeiro, estoque ou impressao nesta auditoria.
+
+### Problemas altos
+
+1. **Listas completas sem paginacao/limite.**
+   - Evidencia: `src/lib/server/saas-customers.ts:listSaasCustomers`, `saas-products.ts:listSaasProducts`, `saas-appointments.ts:listSaasAppointments`, `saas-quotes.ts:listSaasQuotes`, `saas-service-orders.ts:listSaasServiceOrders` e `saas-financial.ts:listSaasFinancialOverview` fazem `GET` sem `limit`/`range`; o financeiro busca, em paralelo, todas as entradas, vendas e itens de venda.
+   - Impacto: payload, tempo de resposta e memoria crescem linearmente por empresa; financeiro e PDV sao os mais expostos. O mapeamento de itens por venda tambem pode crescer para O(vendas x itens).
+   - Correcao: contrato paginado por cursor/data, totais agregados no servidor e carregamento sob demanda de itens/detalhes. Para dashboard, substituir listas inteiras por contagens/consulta especifica do dia.
+   - Risco: medio/alto; muda contratos de telas e exige validar filtros, totais, exportacao e isolamento por `company_id`.
+
+2. **Custo repetido de sessao e autorizacao em cada rota.**
+   - Evidencia: `src/lib/server/session.ts:getAuthenticatedAppSession` chama `getSupabaseSessionState` e `getSaasUserPermissions`; `getSupabaseSessionState` consulta Auth e em seguida membership+company (`src/lib/server/supabase-session.ts`, `tenant-access.ts`); `requireSaasPermission` chama novamente sessao e estado Supabase. `src/app/api/auth/session/route.ts` ainda consulta Platform Admin. No cliente, `AppShell` tem dois guards e as paginas/hooks tambem usam `useCurrentAppSession`.
+   - Impacto: login, primeira navegacao e cada API autenticada podem fazer varias viagens Vercel -> Supabase antes da consulta do modulo.
+   - Correcao: contexto de requisicao memoizado por request (`cache`/request scope), resolver claims no JWT quando seguro e manter uma unica fonte de sessao no React Context.
+   - Risco: alto; exige testes rigorosos de troca de empresa, revogacao de membership, permissao e isolamento.
+
+3. **Bundles iniciais elevados e bibliotecas pesadas estaticas.**
+   - Evidencia: build limpo aponta 369 kB em OS, 360 kB em financeiro, 321 kB em orcamentos e 315 kB em clientes. `src/app/(app)/orcamentos/page.tsx`, `src/components/sales/sale-details-dialog.tsx` e `src/components/financials/sale-details-dialog.tsx` importam `jspdf`/`jspdf-autotable` estaticamente; `recharts` esta no dashboard. A agenda e o exemplo positivo: usa `next/dynamic` para FullCalendar.
+   - Impacto: maior tempo de download, parse e hidratacao especialmente em rede movel/CPU modesta.
+   - Correcao: importar PDF, dialogs de detalhes e graficos sob demanda; manter somente tipos estaticos. Aplicar `next/dynamic` aos modais grandes que nao abrem no primeiro paint.
+   - Risco: medio; exige testar impressao e abertura de dialogs, sem tocar na regra de venda.
+
+### Problemas medios
+
+1. **Dashboard calcula metricas baixando colecoes inteiras.** `src/lib/server/saas-users.ts:buildSaasDashboardOverview` busca clientes, OS e agenda completos e conta/filtra em Node. Usar `count=exact` ou RPC/consulta agregada e filtrar agenda por data/status. Risco medio.
+2. **PDV carrega todo estoque e todos os clientes no inicio.** `src/app/(app)/vendas/page.tsx` chama `listTenantProducts()` e `listTenantCustomers()`; busca por autocomplete ja existe, mas a carga inicial permanece. Risco medio: substituir por busca de codigo de barras/consulta limitada requer preservar itens e fluxo offline/legado onde aplicavel.
+3. **Agenda carrega todos os clientes e agendamentos.** `src/components/agenda/calendar-view.tsx` faz as duas listas; limitar agenda ao intervalo visivel e usar autocomplete remoto de clientes. Risco medio.
+4. **Fontes externas bloqueiam/atrasam a renderizacao.** `src/app/layout.tsx` usa CSS de Google Fonts em `<link>`. Migrar para `next/font`/self-host reduz dependencias externas e melhora cache. Risco baixo.
+5. **Logs de producao verbosos.** `src/app/api/auth/supabase-login/route.ts` registra e-mail e etapas do login; `src/lib/server/saas-products.ts` registra payload/resposta de financeiro. Isso aumenta I/O/custo e expõe dados operacionais em logs. Risco baixo para condicionar/remover logs de diagnostico.
+6. **Cache deliberadamente desativado para dados de leitura.** Varios fetches usam `cache: 'no-store'` e o layout usa `noStore()`. Correto para seguranca de tenant, mas impede cache de configuracao/empresa. Avaliar somente cache privado e invalidacao por tenant; nao usar cache publico para dados SaaS. Risco alto se feito sem desenho de chave/invalidaçao.
+
+### Problemas baixos / manutencao
+
+1. `vercel.json` fixa `maxDuration: 60`, mas nao define regiao. Confirmar no projeto Vercel a regiao da funcao e no Supabase a regiao do projeto; diferencas de regiao adicionam latencia a toda chamada. Nao ha evidencia local de cold start, 500/504 ou tamanho de funcao.
+2. O middleware cobre praticamente todas as rotas exceto assets (`middleware.ts`); medir seu custo em producao, mas nao restringir matcher sem validar renovacao de sessao.
+3. O script `npm run lint` nao e executavel em CI sem input porque usa `next lint` sem ESLint configurado. Migrar para ESLint CLI e incluir no pipeline.
+4. Existem indices adequados para os filtros principais: `company_id` combinado com nome/data/status/cliente/produto nas migrations de clientes, produtos, OS, vendas, financeiro e agenda. Ainda falta confirmar uso real com `EXPLAIN (ANALYZE, BUFFERS)` e revisar busca `ilike` multipla de clientes para indice trigram por tenant, se os volumes crescerem.
+
+### Ordem recomendada
+
+1. Coletar dados reais: Vercel Runtime Logs/Analytics, Supabase Query Performance/`pg_stat_statements`, EXPLAIN das cinco consultas mais chamadas, Lighthouse autenticado e waterfall por modulo.
+2. Paginar clientes, produtos, OS, agenda, orcamentos e, prioritariamente, financeiro; criar endpoints de resumo especificos.
+3. Reduzir trabalho por request de sessao/autorizacao, preservando revalidacao de `company_id` e membership.
+4. Adiar PDF/dialogs/graficos para importacao dinamica; medir novamente os bundles.
+5. Alinhar regioes Vercel/Supabase, instrumentar duracao por rota e configurar alertas para 500/504/timeout.
+6. Migrar lint e remover/condicionar logs diagnosticos de producao.
+
+### Melhorias rapidas e seguras aplicaveis depois de validacao
+
+- Migrar fontes para `next/font`.
+- Remover/condicionar logs `console.info` que carregam payloads de autenticacao e financeiro.
+- Extrair imports de PDF para `import()` nos dialogs; testar cada impressao antes de publicar.
+- Configurar ESLint CLI para liberar lint nao interativo.
+
+### Melhorias que exigem refatoracao
+
+- Paginacao e novos contratos de listagem/relatorios.
+- Contexto/memoizacao de sessao por request e React Context compartilhado.
+- Endpoint/RPC agregado para dashboard e filtros por intervalo na agenda.
+- Cache privado por tenant com invalidaçao transacional.
+
+### Alteracoes feitas nesta auditoria
+
+- Nenhum arquivo de aplicacao, migration, regra de negocio ou configuracao de producao foi alterado.
+- Apenas o cache gerado `.next` foi removido e regenerado para corrigir a falha local `ENOENT` do build.
+- Este `STATUS.md` foi atualizado com o relatorio, testes e proximos passos.
+
+### Validacao de isolamento
+
+- Nenhuma alteracao de codigo que manipule `company_id` foi realizada.
+- O build e o typecheck aprovados confirmam integridade de compilacao, mas nao substituem o teste E2E com duas empresas ja listado como pendencia de seguranca.
+
+## Fase 1 de desempenho - paginacao segura (parcial) - 2026-07-29
+
+### Modulos concluídos nesta etapa
+
+#### Clientes
+
+- **Consulta anterior:** `listSaasCustomers` buscava todos os clientes ativos, sem `limit` ou `offset`, ordenados por `full_name.asc` no Supabase. O total era, portanto, todos os registros visiveis da empresa pelo token/RLS.
+- **Alteracao:** a tela `/clientes` passa a chamar `GET /api/clientes?paginated=true&page=N&search=...` e recebe no maximo **20** registros. A busca por nome, documento, telefone ou e-mail e aplicada no PostgREST antes de `limit`/`offset`; a ordenacao continua no banco (`full_name.asc`).
+- **Isolamento:** a nova consulta usa o mesmo `requireSaasPermission('accessClients')`, o token autenticado/RLS e adiciona o filtro explicito `company_id = context.companyId`. Nenhuma policy, membership, permissao ou autenticacao foi modificada.
+- **Interface:** lista de resultados, busca remota, contagem, pagina atual, Anterior/Proxima, estado de carregamento e estado vazio.
+- **Compatibilidade:** o endpoint sem `paginated=true` foi preservado para os consumidores ainda dependentes da lista integral (agenda, PDV, OS, laudos e orcamentos). Eles permanecem pendencia desta Fase 1 e nao foram alterados implicitamente.
+
+#### Produtos
+
+- **Consulta anterior:** `listSaasProducts` buscava todo o catalogo ativo, sem `limit` ou `offset`, ordenado por `name.asc` no Supabase; depois a tela filtrava no navegador.
+- **Alteracao:** a tela `/produtos` usa a mesma rota com `paginated=true`, pagina de **20** itens e filtro remoto por nome, categoria ou codigo de barras antes da paginacao. A ordenacao permanece `name.asc` no banco.
+- **Isolamento:** o caminho preserva `requireSaasPermission('accessInventory')`, RLS/token e filtro explicito `company_id = context.companyId`. Operacoes de cadastro, entrada de estoque, financeiro, venda, impressao e exclusao nao tiveram sua regra de negocio alterada.
+- **Interface:** a tabela exibe total, pagina atual, Anterior/Proxima e indicacao de carregamento; a busca existente passa a acionar o filtro no servidor para o runtime SaaS.
+
+### Arquivos alterados
+
+- `src/lib/server/saas-customers.ts`
+- `src/app/api/clientes/route.ts`
+- `src/lib/storage.ts`
+- `src/app/(app)/clientes/page.tsx`
+- `src/lib/server/saas-products.ts`
+- `src/app/api/produtos/route.ts`
+- `src/app/(app)/produtos/page.tsx`
+- `STATUS.md`
+
+### Validacoes executadas
+
+- `npm.cmd run typecheck`: aprovado apos Clientes e novamente apos Produtos.
+- `npm.cmd run build`: aprovado apos Clientes e novamente apos Produtos; 76/76 paginas geradas.
+- `npm.cmd run test -- --run`: aprovado, 5 arquivos e 20 testes.
+- A verificacao estatica confirma que as novas consultas paginadas usam `company_id` do contexto autorizado e mantem o token que ativa RLS.
+
+### Validacao manual ainda obrigatoria
+
+- Nao havia credenciais autenticadas de duas empresas nem navegador disponivel nesta sessao. Por isso, criacao, edicao, busca, troca de pagina e tentativa de acesso cruzado precisam ser executadas no Preview/local autenticado antes de considerar a validacao E2E concluida.
+- Ordem de Servico, Orcamentos, Agenda e Financeiro ainda nao foram alterados nesta subetapa. Eles exigem paginacao das entidades compostas (OS/itens/pagamentos/notas e Financeiro/vendas/itens) sem alterar calculos ou fluxos, e devem ser implementados separadamente apos a validacao manual de Clientes e Produtos.
+
+## Fase 1 - continuidade: Orçamentos e análise de risco de OS - 2026-07-29
+
+### Orçamentos - concluído
+
+- **Listagem principal anterior:** `listSaasQuotes` trazia todos os registros de `quotes` e todos os `quote_items`; a ordenação era `quote_date.desc,quote_time.desc` no banco, porém filtro de status e busca por cliente/número ocorriam somente no navegador.
+- **Dados auxiliares preservados:** o construtor continua carregando clientes, produtos e kits para seleção/edição. Eles não foram reutilizados para a listagem e não sofreram mudança de regra de negócio nesta etapa.
+- **Implementação:** `GET /api/orcamentos?paginated=true&page=N&status=...&search=...` busca no máximo **20** orçamentos, aplica status e busca por `customer_name`/ID antes de `limit`/`offset`, ordena no banco e busca itens exclusivamente para os IDs da página atual.
+- **Isolamento:** a rota mantém `requireSaasPermission('accessQuotes')` e a nova consulta usa token/RLS e `company_id = context.companyId` tanto em `quotes` quanto em `quote_items`.
+- **Interface:** contagem, página atual, Anterior/Próxima, carregamento e vazio. Criação, edição, exclusão, atualização de status, conversão em venda e impressão continuam recebendo o orçamento completo da página e não tiveram sua lógica modificada.
+- **Validações:** `npm.cmd run typecheck`, `npm.cmd run build` (76/76 páginas), `npm.cmd run test -- --run` (5 arquivos/20 testes) e `git diff --check`: aprovados.
+
+### Ordens de Serviço - implementação interrompida por risco alto
+
+- **Consultas atuais identificadas:** `listSaasServiceOrders` baixa todas as `service_orders`, todos os itens, pagamentos e notas. A tela também obtém clientes auxiliares, metadados de visualização/leitura e reutiliza o estado composto em edição, comentários, status, finalização e fluxos de estoque/financeiro.
+- **Risco específico:** paginar somente o cabeçalho sem uma rota de detalhe atômica e sem adaptar os dados associados por IDs pode deixar uma OS aberta no editor sem itens/notas/pagamentos, ou substituir o estado usado em finalização. Isso atingiria regras que esta Fase não pode alterar.
+- **Próximo desenho obrigatório:** endpoint paginado de cabeçalhos + endpoint autenticado de detalhe por OS, com itens/pagamentos/notas filtrados por `company_id`; a tela deve carregar o detalhe somente ao abrir uma OS. Também deve separar a contagem de não lidas da lista. Não foi implementado para evitar alteração implícita de negócio.
+
+### Pendências desta Fase
+
+- Implementar OS somente após o desenho de lista versus detalhe descrito acima.
+- Agenda: trocar lista global por intervalo visível do calendário, preservando movimentação/edição.
+- Financeiro: separar dados de totalização dos dados paginados exibidos nas tabelas, sem usar a página para cálculos.
+- Validar manualmente em sessão autenticada: busca, filtros, páginas, criação, edição, exclusão e tentativa entre duas empresas para Clientes, Produtos e Orçamentos.
+
+### Preparação de Preview - 2026-07-29
+
+- Branch de Preview preparada: `rescue-saas-20260722` (rastreando `origin/rescue-saas-20260722`). Nenhum merge ou promoção para Produção foi realizado.
+- Validações finais antes do push: `npm.cmd run typecheck` aprovado; `npm.cmd run build` aprovado (76/76 páginas); `npm.cmd run test -- --run` aprovado (5 arquivos/20 testes); `git diff --check` aprovado.
+- Aviso não bloqueante: npm informou existir uma versão menor mais nova (`11.18.0`); nenhuma dependência ou variável de ambiente foi alterada nesta preparação.
+- O commit de Preview incluirá somente a paginação segura de Clientes, Produtos e Orçamentos e este registro. As alterações preexistentes de dependências/migration permanecem fora deste commit.

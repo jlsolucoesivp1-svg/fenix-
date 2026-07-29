@@ -16,7 +16,7 @@ import {
   deleteTenantCustomer,
   getCustomers,
   getServiceOrders,
-  listTenantCustomers,
+  listTenantCustomersPage,
   saveCustomers,
   searchTenantCustomers,
   updateTenantCustomer,
@@ -58,6 +58,7 @@ import {
   DropdownMenuTrigger,
 } from '@/components/ui/dropdown-menu';
 import { ModuleLoadingState, ModuleState } from '@/components/ui/module-state';
+import { Input } from '@/components/ui/input';
 
 const initialNewCustomerState: Omit<Customer, 'id'> = {
   name: '',
@@ -85,9 +86,29 @@ export default function CustomersPage() {
   const [isAddCustomerDialogOpen, setIsAddCustomerDialogOpen] = React.useState(false);
   const [newCustomer, setNewCustomer] = React.useState(initialNewCustomerState);
   const [loadError, setLoadError] = React.useState<string | null>(null);
+  const [page, setPage] = React.useState(1);
+  const [totalCustomers, setTotalCustomers] = React.useState(0);
+  const [totalPages, setTotalPages] = React.useState(1);
+  const [listSearch, setListSearch] = React.useState('');
+  const [isPageLoading, setIsPageLoading] = React.useState(false);
 
   const useSaasCustomers =
     session.authSource === 'supabase-only' && session.tenantAccess?.canAccessTenant === true;
+
+  const loadSaasCustomersPage = React.useCallback(async (requestedPage: number, search = '') => {
+    setIsPageLoading(true);
+    try {
+      const result = await listTenantCustomersPage({ page: requestedPage, search });
+      setCustomers(result.items);
+      setPage(result.page);
+      setTotalCustomers(result.total);
+      setTotalPages(result.totalPages);
+      setServiceOrders([]);
+      return result;
+    } finally {
+      setIsPageLoading(false);
+    }
+  }, []);
 
   const loadData = React.useCallback(async () => {
     try {
@@ -95,9 +116,7 @@ export default function CustomersPage() {
       setLoadError(null);
 
       if (useSaasCustomers) {
-        const customersData = await listTenantCustomers();
-        setCustomers(sortCustomersByName(customersData));
-        setServiceOrders([]);
+        await loadSaasCustomersPage(1);
         return;
       }
 
@@ -115,7 +134,7 @@ export default function CustomersPage() {
     } finally {
       setIsLoading(false);
     }
-  }, [toast, useSaasCustomers]);
+  }, [loadSaasCustomersPage, toast, useSaasCustomers]);
 
   React.useEffect(() => {
     if (session.isLoading) {
@@ -161,11 +180,17 @@ export default function CustomersPage() {
   }, [isAddCustomerDialogOpen]);
 
   const handleSelectCustomer = React.useCallback(
-    (customer: Customer | null) => {
+    async (customer: Customer | null) => {
       setSelectedCustomer(customer);
 
-      if (!customer || useSaasCustomers) {
+      if (!customer) {
         setCustomerServiceHistory([]);
+        return;
+      }
+
+      if (useSaasCustomers) {
+        const result = await loadSaasCustomersPage(1, customer.name);
+        setSelectedCustomer(result.items.find((item) => item.id === customer.id) ?? null);
         return;
       }
 
@@ -186,17 +211,13 @@ export default function CustomersPage() {
 
       setCustomerServiceHistory(history);
     },
-    [serviceOrders, useSaasCustomers]
+    [loadSaasCustomersPage, serviceOrders, useSaasCustomers]
   );
 
   const handleUpdateCustomer = async (updatedCustomer: Customer) => {
     if (useSaasCustomers) {
       const savedCustomer = await updateTenantCustomer(updatedCustomer);
-      const updatedCustomers = sortCustomersByName(
-        customers.map((customer) => (customer.id === savedCustomer.id ? savedCustomer : customer))
-      );
-
-      setCustomers(updatedCustomers);
+      setCustomers((current) => current.map((customer) => (customer.id === savedCustomer.id ? savedCustomer : customer)));
       setSelectedCustomer(savedCustomer);
     } else {
       const updatedCustomers = sortCustomersByName(
@@ -231,6 +252,10 @@ export default function CustomersPage() {
       description: 'O cliente foi removido do sistema.',
       variant: 'destructive',
     });
+
+    if (useSaasCustomers) {
+      await loadSaasCustomersPage(Math.min(page, totalPages));
+    }
   };
 
   const handleOpenServiceOrder = () => {
@@ -251,8 +276,9 @@ export default function CustomersPage() {
 
     if (useSaasCustomers) {
       const customerToAdd = await createTenantCustomer(newCustomer);
-      const updatedCustomers = sortCustomersByName([...customers, customerToAdd]);
-      setCustomers(updatedCustomers);
+      await loadSaasCustomersPage(1, '');
+      setListSearch('');
+      setSelectedCustomer(customerToAdd);
 
       toast({
         title: 'Cliente salvo!',
@@ -345,12 +371,17 @@ export default function CustomersPage() {
               selectedCustomer={selectedCustomer}
               onSelect={(customer) => {
                 if (!customer) {
-                  handleSelectCustomer(null);
+                  void handleSelectCustomer(null);
                   return;
                 }
 
                 const fullCustomer = customers.find((item) => item.id === customer.id) ?? null;
-                handleSelectCustomer(fullCustomer);
+                if (fullCustomer) {
+                  void handleSelectCustomer(fullCustomer);
+                  return;
+                }
+
+                void handleSelectCustomer(customer as Customer);
               }}
               searchFunction={useSaasCustomers ? searchTenantCustomers : undefined}
               placeholder="Digite para buscar clientes em tempo real..."
@@ -358,6 +389,77 @@ export default function CustomersPage() {
               className="w-full md:w-[400px]"
             />
           </div>
+
+          {useSaasCustomers ? (
+            <div className="space-y-3 border-t pt-4">
+              <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
+                <Input
+                  value={listSearch}
+                  onChange={(event) => setListSearch(event.target.value)}
+                  onKeyDown={(event) => {
+                    if (event.key === 'Enter') {
+                      void loadSaasCustomersPage(1, listSearch);
+                    }
+                  }}
+                  placeholder="Filtrar por nome, documento, telefone ou e-mail"
+                  className="sm:max-w-md"
+                />
+                <Button variant="outline" onClick={() => void loadSaasCustomersPage(1, listSearch)} disabled={isPageLoading}>
+                  {isPageLoading ? 'Carregando...' : 'Buscar'}
+                </Button>
+              </div>
+
+              <div className="rounded-md border">
+                {isPageLoading ? (
+                  <p className="p-4 text-sm text-muted-foreground">Carregando clientes...</p>
+                ) : customers.length === 0 ? (
+                  <p className="p-4 text-sm text-muted-foreground">Nenhum cliente encontrado.</p>
+                ) : (
+                  <div className="divide-y">
+                    {customers.map((customer) => (
+                      <button
+                        key={customer.id}
+                        type="button"
+                        className="flex w-full items-center justify-between gap-4 p-3 text-left hover:bg-muted/50"
+                        onClick={() => void handleSelectCustomer(customer)}
+                      >
+                        <span>
+                          <span className="block font-medium">{customer.name}</span>
+                          <span className="block text-sm text-muted-foreground">
+                            {customer.document || customer.phone || customer.email || 'Sem contato informado'}
+                          </span>
+                        </span>
+                        <span className="text-sm text-muted-foreground">Ver detalhes</span>
+                      </button>
+                    ))}
+                  </div>
+                )}
+              </div>
+
+              <div className="flex flex-wrap items-center justify-between gap-3 text-sm text-muted-foreground">
+                <span>{totalCustomers} {totalCustomers === 1 ? 'cliente' : 'clientes'} no resultado</span>
+                <div className="flex items-center gap-2">
+                  <Button
+                    variant="outline"
+                    size="sm"
+                    onClick={() => void loadSaasCustomersPage(page - 1, listSearch)}
+                    disabled={isPageLoading || page <= 1}
+                  >
+                    Anterior
+                  </Button>
+                  <span>Pagina {page} de {totalPages}</span>
+                  <Button
+                    variant="outline"
+                    size="sm"
+                    onClick={() => void loadSaasCustomersPage(page + 1, listSearch)}
+                    disabled={isPageLoading || page >= totalPages}
+                  >
+                    Proxima
+                  </Button>
+                </div>
+              </div>
+            </div>
+          ) : null}
         </CardContent>
       </Card>
 
