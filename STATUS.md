@@ -638,3 +638,27 @@ Build - First Load JS relevante: `/clientes` 315 kB, `/financeiro` 360 kB, `/orc
 - Validacoes antes da publicacao: `npm.cmd run typecheck` aprovado; `npm.cmd run test -- --run` aprovado (6 arquivos/22 testes); `npm.cmd run build` aprovado (77/77 paginas); `git diff --check` aprovado.
 - O commit de Preview deve conter somente Configuracoes, autorizacao de administrador por empresa, Backup SaaS, a migration `20260729000015`, teste e este STATUS. `package.json`, `package-lock.json` e a migration preexistente `20260728000014_harden_legacy_app_storage.sql` ficam fora do commit.
 - Nao foram alterados restauracao, limpeza, zeramento, Ordem de Servico, financeiro, estoque, vendas ou painel Super Admin nesta publicacao.
+
+## Backup Completo SaaS (ZIP) - 2026-07-29
+
+### Arquitetura e isolamento
+
+- Novo endpoint Node.js `GET /api/tenant/backup/full`, protegido por `requireSaasCompanyAdmin`. O `company_id` e obtido exclusivamente da sessao SaaS validada; a rota nao aceita ID de empresa do frontend.
+- O ZIP contem `backup.json`, `manifest.json` e arquivos em `storage/<bucket>/<caminho-original>`. O backup JSON preserva a estrutura tenantizada atual e acrescenta `backupId`, versoes de formato/esquema, versao da aplicacao quando disponivel, metadados de Storage e checksum de dados SHA-256.
+- O manifest registra empresa, buckets, tamanho/quantidade, arquivo de banco, checksum SHA-256 de `backup.json`, checksum individual, MIME type e caminhos original/ZIP de cada binario; tambem registra itens ignorados, warnings e status final.
+- Buckets auditados: `company-assets/<company_id>/...`, `customer-files/<company_id>/<customer_id>/...` e `service-order-files/<company_id>/<service_order_id>/...`. A listagem e download ocorrem somente no servidor com token do usuario e RLS. Todo caminho e validado para comecar por `<company_id>/`; anomalia de prefixo cancela a exportacao.
+- Falha de listagem ou download de arquivo e registrada como warning no manifest; falha de dados, prefixo anomalo ou exceder limite cancela todo o ZIP. Nao ha arquivo temporario em disco: buffers existem somente durante a resposta e sao liberados pelo runtime ao concluir/falhar.
+- A exportacao completa registra `company_full_backup_exported` em `audit_logs`. Nao ha restauracao nesta etapa.
+
+### Limites atuais do piloto
+
+- `vercel.json` define 60 segundos para APIs; a rota tambem declara `maxDuration = 60` e runtime Node.js.
+- Para evitar exaustao de memoria/timeout, o ZIP sem compressao em memoria limita Storage a **250 arquivos** e **25 MB**. Acima disso, retorna erro claro e nao gera arquivo parcial. Para backups maiores, a proxima evolucao deve ser job assincrono, armazenamento temporario privado e link de download assinado.
+- O ZIP usa formato Store (sem compressao) implementado internamente; nao foram adicionadas dependencias nem credenciais no frontend.
+
+### Interface, arquivos e testes
+
+- Configuracoes mantem **Backup JSON** e adiciona **Backup completo**, com bloqueio de clique concorrente, estado de processamento e mensagem de warnings retornados pelo servidor.
+- Arquivos criados: `src/app/api/tenant/backup/full/route.ts`, `src/lib/server/zip-store.ts` e `src/lib/server/zip-store.test.ts`. Alterados: `src/lib/server/saas-company-backup.ts` e `src/app/(app)/configuracoes/page.tsx`.
+- Testes locais aprovados: `npm.cmd run typecheck`; `npm.cmd run test -- --run` (7 arquivos/24 testes, incluindo estrutura ZIP e SHA-256); `npm.cmd run build` (78/78 paginas); `git diff --check` aprovado.
+- Pendentes de Preview com duas empresas autenticadas: download admin A/B, bloqueio de usuario comum/membership inativa, ausencia cruzada de arquivos, checksums reais, warning de arquivo ausente, audit log remoto e tentativa de `company_id` adulterado. Nao foram executados dados destrutivos ou alteradas policies/RLS.

@@ -62,6 +62,7 @@ function SaaSCompanySettingsPage() {
   const [isSavingSettings, setIsSavingSettings] = React.useState(false);
   const [isUploadingAsset, setIsUploadingAsset] = React.useState<CompanyAssetKind | null>(null);
   const [isGeneratingBackup, setIsGeneratingBackup] = React.useState(false);
+  const [isGeneratingFullBackup, setIsGeneratingFullBackup] = React.useState(false);
   const [settings, setSettings] = React.useState<AppSettings>(DEFAULT_SETTINGS);
   const [companyInfo, setCompanyInfo] = React.useState<CompanyInfo>(DEFAULT_COMPANY_INFO);
   const [assets, setAssets] = React.useState<CompanyAssetSummary[]>([]);
@@ -360,6 +361,28 @@ function SaaSCompanySettingsPage() {
     }
   };
 
+  const handleFullBackup = async () => {
+    try {
+      setIsGeneratingFullBackup(true);
+      const response = await fetch('/api/tenant/backup/full', { credentials: 'include', cache: 'no-store' });
+      if (!response.ok) {
+        const payload = await response.json().catch(() => null) as { error?: string } | null;
+        throw new Error(payload?.error || 'Nao foi possivel gerar o backup completo.');
+      }
+      const blob = await response.blob();
+      const disposition = response.headers.get('content-disposition') || '';
+      const fileName = disposition.match(/filename="?([^";]+)"?/i)?.[1] || 'fenix-saas-backup-completo.zip';
+      const url = URL.createObjectURL(blob);
+      const anchor = document.createElement('a');
+      anchor.href = url; anchor.download = fileName;
+      document.body.appendChild(anchor); anchor.click(); document.body.removeChild(anchor); URL.revokeObjectURL(url);
+      const warnings = Number(response.headers.get('x-backup-warnings') || '0');
+      toast({ title: 'Backup completo gerado', description: warnings ? `Download concluido com ${warnings} aviso(s) de arquivos.` : 'Dados e arquivos da empresa ativa foram incluidos no ZIP.' });
+    } catch (error) {
+      toast({ variant: 'destructive', title: 'Erro ao gerar backup completo', description: error instanceof Error ? error.message : 'Nao foi possivel gerar o ZIP.' });
+    } finally { setIsGeneratingFullBackup(false); }
+  };
+
   if (session.isLoading || isLoading) {
     return (
       <ModuleLoadingState
@@ -458,10 +481,14 @@ function SaaSCompanySettingsPage() {
             </CardDescription>
           </CardHeader>
           <CardFooter className="border-t px-6 py-4">
-            <Button variant="outline" onClick={() => void handleBackup()} disabled={isGeneratingBackup}>
-              <Download className="mr-2 h-4 w-4" />
-              {isGeneratingBackup ? 'Gerando backup...' : 'Gerar Backup'}
-            </Button>
+            <div className="flex flex-wrap gap-2">
+              <Button variant="outline" onClick={() => void handleBackup()} disabled={isGeneratingBackup || isGeneratingFullBackup}>
+                <Download className="mr-2 h-4 w-4" />{isGeneratingBackup ? 'Gerando JSON...' : 'Backup JSON'}
+              </Button>
+              <Button onClick={() => void handleFullBackup()} disabled={isGeneratingBackup || isGeneratingFullBackup}>
+                <Download className="mr-2 h-4 w-4" />{isGeneratingFullBackup ? 'Gerando ZIP...' : 'Backup completo'}
+              </Button>
+            </div>
           </CardFooter>
         </Card>
       ) : null}
