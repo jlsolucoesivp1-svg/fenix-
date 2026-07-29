@@ -1,8 +1,10 @@
 'use client';
 
 import * as React from 'react';
+import Link from 'next/link';
 import {
   Building,
+  Download,
   FileAudio2,
   FileImage,
   Image as ImageIcon,
@@ -10,6 +12,7 @@ import {
   Save,
   Trash2,
   Upload,
+  UsersRound,
   X,
 } from 'lucide-react';
 import Image from 'next/image';
@@ -58,6 +61,7 @@ function SaaSCompanySettingsPage() {
   const [isSavingCompany, setIsSavingCompany] = React.useState(false);
   const [isSavingSettings, setIsSavingSettings] = React.useState(false);
   const [isUploadingAsset, setIsUploadingAsset] = React.useState<CompanyAssetKind | null>(null);
+  const [isGeneratingBackup, setIsGeneratingBackup] = React.useState(false);
   const [settings, setSettings] = React.useState<AppSettings>(DEFAULT_SETTINGS);
   const [companyInfo, setCompanyInfo] = React.useState<CompanyInfo>(DEFAULT_COMPANY_INFO);
   const [assets, setAssets] = React.useState<CompanyAssetSummary[]>([]);
@@ -325,6 +329,37 @@ function SaaSCompanySettingsPage() {
     }
   };
 
+  const handleBackup = async () => {
+    try {
+      setIsGeneratingBackup(true);
+      const response = await fetch('/api/tenant/backup', { credentials: 'include', cache: 'no-store' });
+      if (!response.ok) {
+        const payload = await response.json().catch(() => null) as { error?: string } | null;
+        throw new Error(payload?.error || 'Nao foi possivel gerar o backup da empresa.');
+      }
+
+      const payload = await response.json();
+      const blob = new Blob([JSON.stringify(payload, null, 2)], { type: 'application/json' });
+      const url = URL.createObjectURL(blob);
+      const anchor = document.createElement('a');
+      anchor.href = url;
+      anchor.download = `fenix-saas-${payload.metadata.company.slug}-${payload.metadata.createdAt.slice(0, 10)}.json`;
+      document.body.appendChild(anchor);
+      anchor.click();
+      document.body.removeChild(anchor);
+      URL.revokeObjectURL(url);
+      toast({ title: 'Backup gerado', description: 'O JSON contem somente os dados da empresa ativa.' });
+    } catch (error) {
+      toast({
+        variant: 'destructive',
+        title: 'Erro ao gerar backup',
+        description: error instanceof Error ? error.message : 'Nao foi possivel gerar o backup SaaS.',
+      });
+    } finally {
+      setIsGeneratingBackup(false);
+    }
+  };
+
   if (session.isLoading || isLoading) {
     return (
       <ModuleLoadingState
@@ -413,6 +448,23 @@ function SaaSCompanySettingsPage() {
           </Button>
         </CardFooter>
       </Card>
+
+      {session.effectivePermissions?.accessDangerZone ? (
+        <Card>
+          <CardHeader>
+            <CardTitle>Backup da Empresa</CardTitle>
+            <CardDescription>
+              Exporte um JSON versionado somente com os dados da empresa ativa. A restauracao nao faz parte desta etapa.
+            </CardDescription>
+          </CardHeader>
+          <CardFooter className="border-t px-6 py-4">
+            <Button variant="outline" onClick={() => void handleBackup()} disabled={isGeneratingBackup}>
+              <Download className="mr-2 h-4 w-4" />
+              {isGeneratingBackup ? 'Gerando backup...' : 'Gerar Backup'}
+            </Button>
+          </CardFooter>
+        </Card>
+      ) : null}
 
       <Card>
         <CardHeader>
@@ -573,6 +625,29 @@ function SaaSCompanySettingsPage() {
           <Button onClick={handleSaveSettings} disabled={isSavingSettings}>
             <Save className="mr-2 h-4 w-4" />
             Salvar Configuracoes
+          </Button>
+        </CardFooter>
+      </Card>
+
+      <Card>
+        <CardHeader>
+          <CardTitle>Usuarios, Perfis e Permissoes</CardTitle>
+          <CardDescription>
+            Gerencie somente os usuarios, memberships e permissoes da empresa ativa.
+          </CardDescription>
+        </CardHeader>
+        <CardContent>
+          <p className="text-sm text-muted-foreground">
+            Administradores da empresa podem criar, editar, revogar acessos e definir permissoes sem acessar
+            usuarios de outros tenants.
+          </p>
+        </CardContent>
+        <CardFooter className="border-t px-6 py-4">
+          <Button asChild>
+            <Link href="/usuarios">
+              <UsersRound className="mr-2 h-4 w-4" />
+              Gerenciar Usuarios e Permissoes
+            </Link>
           </Button>
         </CardFooter>
       </Card>

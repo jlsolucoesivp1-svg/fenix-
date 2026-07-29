@@ -564,3 +564,77 @@ Build - First Load JS relevante: `/clientes` 315 kB, `/financeiro` 360 kB, `/orc
 - **Escopo preservado:** nenhuma mudanca em APIs, autenticacao, permissoes, memberships, RLS, `company_id` ou outros modulos.
 - **Arquivos alterados:** `src/app/(app)/configuracoes/page.tsx` e `STATUS.md`.
 - **Validacoes:** `npm.cmd run typecheck`, `npm.cmd run build` (76/76 paginas), `npm.cmd run test -- --run` (5 arquivos/20 testes) e `git diff --check`: aprovados.
+
+## Auditoria de Configuracoes SaaS - 2026-07-29
+
+### Achados e correcoes seguras aplicadas
+
+- **Regra de administrador corrigida:** o banco ja possuia `roles.is_company_admin`, mas `getSaasUserPermissions` e `assertActorCanManageUsers` so concediam todos os acessos a `company_memberships.is_owner`. A nova migration `20260729000015_company_admin_effective_permissions.sql` inclui `roles.is_company_admin = true` em `has_company_permission(company_id, ...)`; o servidor tambem reconhece essa role ao montar permissoes e ao autorizar usuarios. A verificacao continua exigindo membership ativa, empresa `active`/`trial` e o `company_id` alvo. Nao ha acesso a outra empresa nem elevacao a `platform_admin`.
+- **Dados da empresa / identidade visual / aparencia / configuracoes operacionais / impressao:** residem em `src/app/(app)/configuracoes/page.tsx` (`SaaSCompanySettingsPage`). Usam `GET/PUT /api/tenant/company`, `GET/PUT /api/tenant/settings` e `GET/POST/DELETE /api/tenant/assets`, todos com `requireSaasPermission('accessSettings')`, token autenticado, `company_id` do contexto e RLS em `companies`, `company_settings`, `company_branding` e `storage.objects`. A tela e SaaS e aparece ao administrador depois da correcao de permissoes.
+- **Usuarios, perfis e permissoes:** residem em `src/app/(app)/usuarios/page.tsx`, acessivel agora tambem pela entrada explicita adicionada em Configuracoes. Usa `/api/usuarios` e `/api/usuarios/[id]`, e limita as memberships, roles e permissoes ao `activeCompanyId`; a autorizacao servidor valida a membership/role do ator. A listagem nunca consulta memberships de outra empresa.
+- **Ferramentas, backup, restauracao, limpeza e zeramento:** os componentes legados `src/components/configuracoes/page.tsx` e `src/app/(app)/configuracoes/ferramentas/page.tsx` ainda usam `src/lib/storage.ts`, `/api/data/*` e `/api/backup/*`. Esses caminhos operam as colecoes legadas `app_records` sem `company_id`; backup e export SQL sao globais, restauracao executa varios `save*` sem transacao/audit log, e limpeza substitui colecoes inteiras. Portanto, eles **nao foram liberados para sessao SaaS**: faze-lo violaria o isolamento entre empresas.
+- **Bootstrap SaaS:** localizado em Ferramentas, chama `/api/internal/saas/bootstrap`; e operacao de provisionamento, nao configuracao da empresa ativa. Deve permanecer fora da area de administrador de tenant.
+
+### Risco e proxima etapa obrigatoria
+
+- Para liberar Backup, Restauracao e Zona de Perigo no SaaS e necessario criar uma API tenantizada que: aceite somente o `company_id` ativo autorizado; gere snapshot assinado exclusivamente das tabelas desse tenant; valide que um backup pertence ao mesmo tenant; execute restauracao/zeramento em transacao; registre `audit_logs`; e nunca use `service_role` no navegador. A migracao deve abranger, na ordem correta de FK, clientes, agenda, orcamentos/itens, produtos/movimentos, OS/itens/pagamentos/notas/historico, vendas/itens e financeiro/idempotencia, preservando a company core, memberships e usuarios.
+- Nao existe teste de integracao com duas empresas autenticadas neste ambiente. Apos a API tenantizada existir, sao obrigatorios testes de: administrador versus usuario comum; empresa A versus B; backup A sem dados B; restauracao A recusando backup B; e zeramento A sem alterar B.
+
+### Validacoes desta etapa
+
+- `npm.cmd run typecheck`: aprovado apos cada uma das duas etapas.
+- `npm.cmd run test -- --run`: aprovado, 5 arquivos e 20 testes.
+- `npm.cmd run build`: aprovado apos cada etapa, 76/76 paginas.
+- `git diff --check`: aprovado; apenas avisos LF/CRLF em arquivos ja modificados.
+- Nenhum commit ou push foi realizado. Alteracoes preexistentes em `package.json`, `package-lock.json` e `supabase/migrations/20260728000014_harden_legacy_app_storage.sql` foram preservadas e nao fazem parte desta auditoria.
+
+## Backup SaaS por empresa - 2026-07-29
+
+### Mapeamento
+
+- **Tabelas operacionais com `company_id`:** `customers`, `appointments`, `quotes`, `quote_items`, `kits`, `kit_items`, `products`, `inventory_movements`, `service_orders`, `service_order_items`, `service_order_payments`, `service_order_notes`, `service_order_history`, `service_order_views`, `sales`, `sale_items`, `financial_entries` e `idempotency_keys`.
+- **Configuracao por empresa:** `companies` (somente a empresa ativa por `id`), `company_settings` e `company_branding` (por `company_id`).
+- **Usuarios e permissoes do tenant:** `company_memberships` e `roles` sao filtradas por `company_id`; `role_permissions` nao possui `company_id`, portanto e incluida somente para os IDs de roles retornados da empresa ativa. `profiles`, `permissions`, `platform_admins` e `audit_logs` sao globais/plataforma e nao entram no arquivo.
+- **Relacoes:** clientes sao referenciados por agenda, orcamentos, OS e vendas; produtos por kits, itens de orcamento, OS e vendas; OS possui itens/pagamentos/notas/historico/views; vendas possuem itens e geram efeitos financeiros; tudo acima preserva `company_id`. Esta etapa apenas le os registros, sem alterar esses fluxos.
+- **Legado excluido:** `app_records` e `app_singletons` seguem globais e nao sao consultados. Nenhuma rota `/api/data/*` e usada.
+- **Storage:** `company-assets`, `customer-files` e `service-order-files` usam prefixos por empresa. Os binarios nao sao incluidos no JSON nesta primeira versao; o metadata declara explicitamente essa limitacao para evitar expectativa incorreta de restauracao de arquivos.
+
+### Implementacao
+
+- Novo endpoint `GET /api/tenant/backup`, sem parametro de `company_id`. O servidor extrai o ID somente da sessao SaaS validada e exige `requireSaasCompanyAdmin`: membership ativa e owner ou role `is_company_admin` da empresa ativa.
+- O gerador usa token do usuario/RLS e filtro explicito `company_id = contexto.companyId` em todas as tabelas de tenant. Ele cria JSON `fenix-saas-company-backup`, versao `1`, com data e identificacao da empresa.
+- Nenhum secret, token, chave anon, service role, variavel de ambiente, dados de outra empresa ou dados globais e colocado no payload.
+- A exportacao grava `audit_logs` com acao `company_backup_exported`, empresa e ator. `service_role`, quando necessario para o audit log no servidor, nunca e exposto ao navegador.
+- A opcao **Gerar Backup** esta em Configuracoes para quem possui o acesso de zona de perigo; o endpoint faz a verificacao administrativa definitiva no servidor. Restauracao, limpeza e zeramento nao foram implementados nem alterados.
+
+### Testes e pendencias
+
+- Novo teste unitario `src/lib/server/saas-company-backup.test.ts`: confirma JSON versionado/identificado, ausencia de token/chaves e empresa B, audit log, e filtro de empresa em cada leitura aplicavel.
+- `npm.cmd run typecheck`: aprovado.
+- `npm.cmd run test -- --run`: aprovado, 6 arquivos e 22 testes.
+- Ainda pendente de ambiente Supabase remoto com duas empresas: status HTTP real para admin, usuario comum, membership inativa e tentativa com `company_id` adulterado; confirmacao da linha em `audit_logs`; e verificacao RLS cruzada. O endpoint ignora `company_id` enviado pelo cliente porque nao aceita esse parametro.
+- A migration `20260729000015_company_admin_effective_permissions.sql` esta criada localmente. Nao ha evidencia nem acesso de painel/CLI nesta sessao que confirme sua aplicacao no Supabase remoto; ela deve ser aplicada antes de validar administradores que usam apenas `roles.is_company_admin`.
+
+## Aplicacao remota - permissao de administrador SaaS - 2026-07-29
+
+- **Projeto confirmado:** o Supabase CLI esta vinculado ao ref `jmnzwbiyfehexfvmdkbt`, projeto **Fenix Saas**, regiao `sa-east-1`, estado `ACTIVE_HEALTHY`. O projeto `jlsolucoesivp1-svg's Project` aparece separadamente, esta `INACTIVE` e nao esta vinculado; nenhuma operacao foi feita nele.
+- **Migration aplicada:** `20260729000015_company_admin_effective_permissions.sql` foi aplicada com `supabase.cmd db push`. Era a unica pendencia mostrada antes da operacao. Ela faz `CREATE OR REPLACE FUNCTION public.has_company_permission(...)`, reconhecendo `roles.is_company_admin` somente com membership ativa e empresa `active`/`trial`; nao exclui, move ou migra dados operacionais, nem cria/remove policies.
+- **Confirmacao:** `supabase.cmd migration list` mostra `local: 20260729000015` e `remote: 20260729000015`. O unico aviso foi a existencia de nova versao do Supabase CLI (`2.110.0` versus `2.109.1`); nao houve erro de banco. Os avisos sobre arquivos `rollback_*.sql` sao informativos: os nomes nao seguem o padrao de migration e nao foram executados.
+- **Nenhuma outra migration foi aplicada**, e nao houve alteracao de codigo funcional, commit, push ou deploy nesta etapa.
+
+### Roteiro manual de validacao do Backup SaaS (duas empresas)
+
+1. Prepare Empresa A com: administrador, usuario comum sem role administrativa e usuario com `company_memberships.status = inactive`; prepare Empresa B com administrador e dados visivelmente distintos (cliente/produto/agenda, por exemplo). Nao use dados produtivos sensiveis.
+2. Como admin da Empresa A, abra Configuracoes: a opcao **Gerar Backup** deve aparecer. Baixe o JSON e confirme `metadata.version = 1`, `metadata.type = fenix-saas-company-backup`, `metadata.company.id/slug/tradeName` da Empresa A e `metadata.storage.binaryFilesIncluded = false`.
+3. Pesquise no JSON por IDs, nomes e documentos de Empresa B; nao deve haver ocorrencia. Confirme tambem ausencia de `service_role`, `token`, `profiles`, `platform_admins`, `app_records` e `app_singletons`.
+4. No DevTools, repita `GET /api/tenant/backup` acrescentando ou alterando `company_id` na URL: o arquivo ainda deve identificar Empresa A, pois a rota ignora esse parametro e deriva o tenant da sessao servidor.
+5. Como usuario comum de A, a chamada deve retornar `403`; como membership inativa, deve retornar bloqueio (`403`/sessao de tenant indisponivel). Nenhum arquivo deve ser baixado.
+6. Como admin de B, gere outro arquivo e confirme que ele identifica somente Empresa B e nao contem registros de A.
+7. No SQL Editor/painel Supabase, consulte `audit_logs` filtrando `action = 'company_backup_exported'` e os IDs de A/B: deve existir uma linha por exportacao, com `company_id` e `actor_user_id` corretos.
+8. Nao testar restauracao, limpeza ou zeramento nesta fase. Os binarios de Storage devem permanecer fora do JSON, conforme metadata.
+
+### Preparacao final de Preview - Backup SaaS
+
+- Validacoes antes da publicacao: `npm.cmd run typecheck` aprovado; `npm.cmd run test -- --run` aprovado (6 arquivos/22 testes); `npm.cmd run build` aprovado (77/77 paginas); `git diff --check` aprovado.
+- O commit de Preview deve conter somente Configuracoes, autorizacao de administrador por empresa, Backup SaaS, a migration `20260729000015`, teste e este STATUS. `package.json`, `package-lock.json` e a migration preexistente `20260728000014_harden_legacy_app_storage.sql` ficam fora do commit.
+- Nao foram alterados restauracao, limpeza, zeramento, Ordem de Servico, financeiro, estoque, vendas ou painel Super Admin nesta publicacao.

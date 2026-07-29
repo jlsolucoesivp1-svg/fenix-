@@ -3,6 +3,7 @@ import type { UserPermissions } from '@/types';
 import { hasUserPermission } from '@/lib/permissions';
 import { getAuthenticatedAppSession } from './session';
 import { getSupabaseSessionState, type SupabaseSessionState } from './supabase-session';
+import { assertActorIsCompanyAdmin } from './saas-users';
 
 export interface SaasRequestContext {
   accessToken: string;
@@ -42,4 +43,24 @@ export const requireSaasPermission = async (
     effectivePermissions: session.effectivePermissions,
     supabaseSession,
   };
+};
+
+export const requireSaasCompanyAdmin = async (
+  unavailableMessage: string,
+  deniedMessage = 'Apenas administradores da empresa podem executar esta acao.'
+): Promise<SaasRequestContext | NextResponse> => {
+  const context = await requireSaasPermission('accessDangerZone', unavailableMessage, deniedMessage);
+  if (context instanceof NextResponse) {
+    return context;
+  }
+
+  try {
+    await assertActorIsCompanyAdmin(context.userId, context.companyId);
+    return context;
+  } catch (error) {
+    return NextResponse.json(
+      { error: error instanceof Error ? error.message : deniedMessage },
+      { status: 403 }
+    );
+  }
 };

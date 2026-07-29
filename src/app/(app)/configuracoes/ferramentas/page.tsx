@@ -23,6 +23,7 @@ import { RadioGroup, RadioGroupItem } from '@/components/ui/radio-group';
 import { Input } from '@/components/ui/input';
 import { Badge } from '@/components/ui/badge';
 import { useCurrentAppSession } from '@/hooks/use-current-app-session';
+import { ModuleLoadingState, ModuleState } from '@/components/ui/module-state';
 
 interface BackupDataSummary {
   customers: number;
@@ -54,6 +55,26 @@ export default function FerramentasPage() {
   const [bootstrapTradeName, setBootstrapTradeName] = React.useState('');
   const [bootstrapLegalName, setBootstrapLegalName] = React.useState('');
   const [isBootstrappingSaas, setIsBootstrappingSaas] = React.useState(false);
+
+  if (session.isLoading) {
+    return (
+      <ModuleLoadingState
+        title="Carregando ferramentas"
+        description="Verificando a sessao e a empresa ativa."
+      />
+    );
+  }
+
+  // These controls still write the legacy global app_records store. Do not
+  // expose them to a SaaS tenant until their company-scoped replacement exists.
+  if (session.authSource === 'supabase-only' && session.tenantAccess?.canAccessTenant) {
+    return (
+      <ModuleState
+        title="Ferramentas em migracao para o tenant"
+        description="Backup, restauracao e limpeza ainda nao podem ser executados porque o fluxo legado nao isola company_id. A versao SaaS sera liberada somente com transacao, auditoria e validacao do tenant do backup."
+      />
+    );
+  }
 
   React.useEffect(() => {
     if (session.supabaseUser?.id) {

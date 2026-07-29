@@ -207,6 +207,12 @@ export const getSaasUserPermissions = async (
     return { ...NO_USER_PERMISSIONS };
   }
 
+  const roles = await fetchRoles(companyId);
+  const role = roles.find((item) => item.id === membership.role_id);
+  if (role?.is_company_admin) {
+    return { ...ALL_USER_PERMISSIONS };
+  }
+
   const [rolePermissions, permissionCatalog] = await Promise.all([
     fetchRolePermissions([membership.role_id]),
     fetchPermissionCatalog(),
@@ -304,10 +310,16 @@ const actorHasPermission = async (params: {
     return false;
   }
 
-  const [rolePermissions, permissions] = await Promise.all([
+  const [roles, rolePermissions, permissions] = await Promise.all([
+    fetchRoles(params.companyId),
     fetchRolePermissions([membership.role_id]),
     fetchPermissionCatalog(),
   ]);
+
+  const role = roles.find((item) => item.id === membership.role_id);
+  if (role?.is_company_admin) {
+    return true;
+  }
 
   const rolePermissionIds = new Set(rolePermissions.map((item) => item.permission_id));
   const requiredPermissionId = permissions.get(params.permission as PermissionCode);
@@ -324,6 +336,26 @@ export const assertActorCanManageUsers = async (actorUserId: string, companyId: 
 
   if (!allowed) {
     throw new Error('Voce nao tem permissao para gerenciar usuarios deste tenant.');
+  }
+};
+
+export const assertActorIsCompanyAdmin = async (actorUserId: string, companyId: string) => {
+  const membership = await findMembership(companyId, actorUserId);
+  if (!membership || membership.status !== 'active') {
+    throw new Error('Voce nao possui membership ativa nesta empresa.');
+  }
+
+  if (membership.is_owner) {
+    return;
+  }
+
+  if (!membership.role_id) {
+    throw new Error('Voce nao e administrador desta empresa.');
+  }
+
+  const roles = await fetchRoles(companyId);
+  if (!roles.some((role) => role.id === membership.role_id && role.is_company_admin)) {
+    throw new Error('Voce nao e administrador desta empresa.');
   }
 };
 
