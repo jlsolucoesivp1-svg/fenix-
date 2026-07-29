@@ -237,24 +237,32 @@ export default function CustomersPage() {
   };
 
   const handleDeleteCustomer = async (customerId: string) => {
-    if (useSaasCustomers) {
-      await deleteTenantCustomer(customerId);
-    } else {
-      const updatedCustomers = customers.filter((customer) => customer.id !== customerId);
-      await saveCustomers(updatedCustomers);
-    }
+    try {
+      if (useSaasCustomers) {
+        await deleteTenantCustomer(customerId);
+      } else {
+        const updatedCustomers = customers.filter((customer) => customer.id !== customerId);
+        await saveCustomers(updatedCustomers);
+      }
 
-    setCustomers((current) => current.filter((customer) => customer.id !== customerId));
-    setSelectedCustomer(null);
-    setCustomerServiceHistory([]);
-    toast({
-      title: 'Cliente excluido!',
-      description: 'O cliente foi removido do sistema.',
-      variant: 'destructive',
-    });
+      setCustomers((current) => current.filter((customer) => customer.id !== customerId));
+      setSelectedCustomer(null);
+      setCustomerServiceHistory([]);
+      toast({
+        title: 'Cliente excluido!',
+        description: 'O cliente foi removido do sistema.',
+        variant: 'destructive',
+      });
 
-    if (useSaasCustomers) {
-      await loadSaasCustomersPage(Math.min(page, totalPages));
+      if (useSaasCustomers) {
+        await loadSaasCustomersPage(Math.min(page, totalPages), listSearch);
+      }
+    } catch (error) {
+      toast({
+        variant: 'destructive',
+        title: 'Nao foi possivel excluir o cliente',
+        description: error instanceof Error ? error.message : 'A exclusao nao foi concluida.',
+      });
     }
   };
 

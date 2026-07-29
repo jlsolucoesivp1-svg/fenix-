@@ -277,17 +277,21 @@ export const deleteSaasCustomer = async (params: {
 }): Promise<void> => {
   const response = await fetch(
     buildCustomersUrl({
+      select: 'id',
       id: `eq.${params.customerId}`,
       company_id: `eq.${params.companyId}`,
     }),
     {
       method: 'DELETE',
-      headers: buildHeaders(params.accessToken),
+      headers: buildHeaders(params.accessToken, true),
       cache: 'no-store',
     }
   );
 
-  if (!response.ok) {
-    throw new Error(await parseErrorMessage(response));
+  if (!response.ok) throw new Error(await parseErrorMessage(response));
+
+  const deletedRows = (await response.json()) as Array<{ id: string }>;
+  if (!deletedRows.some((row) => row.id === params.customerId)) {
+    throw new Error('Cliente nao encontrado ou indisponivel para exclusao nesta empresa.');
   }
 };

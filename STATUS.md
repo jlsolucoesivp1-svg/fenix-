@@ -529,3 +529,30 @@ Build - First Load JS relevante: `/clientes` 315 kB, `/financeiro` 360 kB, `/orc
 - Validações finais antes do push: `npm.cmd run typecheck` aprovado; `npm.cmd run build` aprovado (76/76 páginas); `npm.cmd run test -- --run` aprovado (5 arquivos/20 testes); `git diff --check` aprovado.
 - Aviso não bloqueante: npm informou existir uma versão menor mais nova (`11.18.0`); nenhuma dependência ou variável de ambiente foi alterada nesta preparação.
 - O commit de Preview incluirá somente a paginação segura de Clientes, Produtos e Orçamentos e este registro. As alterações preexistentes de dependências/migration permanecem fora deste commit.
+
+## Correcao - exclusao de cliente SaaS - 2026-07-29
+
+### Investigacao e causa encontrada
+
+- O botao **Acoes -> Excluir Cliente** chama `handleDeleteCustomer`, que chama `deleteTenantCustomer` e envia `DELETE /api/clientes/{id}`. A rota aplica `requireSaasPermission('accessClients')`, resolve o token Supabase e chama `deleteSaasCustomer` com `id` e `company_id` da sessao.
+- A consulta ao Supabase ja possuia filtro explicito `company_id = context.companyId`; portanto, nao havia ampliacao do escopo entre empresas. A policy `customers_delete_clients` tambem exige `has_company_permission(company_id, 'access_clients')`.
+- A falha de observabilidade era dupla: a tela nao capturava rejeicoes assincronas do DELETE (erro silencioso para o operador) e o PostgREST pode responder sucesso com zero linhas afetadas quando o filtro/RLS nao encontra uma linha. Nesse caso a API retornava `{ success: true }` apesar de nenhum cliente ter sido apagado.
+
+### Correcao aplicada
+
+- `deleteSaasCustomer` agora usa `Prefer: return=representation` e solicita o campo `id` no DELETE. A operacao so e considerada concluida quando a resposta contem o cliente solicitado; zero linhas retornam erro claro.
+- A tela passa a capturar a falha e exibir toast destrutivo com a mensagem devolvida pela API. Nao remove mais o cliente da lista local nem mostra sucesso quando a exclusao falha.
+- Apos sucesso, a pagina atual e recarregada preservando o filtro de busca ativo.
+
+### Relacionamentos e isolamento
+
+- Nao foi encontrado FK bloqueante nas migrations atuais: `appointments`, `quotes`, `service_orders` e `sales` referenciam o cliente por chave composta `(company_id, customer_id)` com `ON DELETE SET NULL`. As movimentacoes permanecem historicas, com o vinculo de cliente anulado conforme a regra ja declarada no banco.
+- Nao foram alterados autenticacao, memberships, permissoes, RLS, `company_id`, vendas, estoque, financeiro ou impressao.
+
+### Testes
+
+- `npm.cmd run typecheck`: aprovado.
+- `npm.cmd run build`: aprovado (76/76 paginas).
+- `npm.cmd run test -- --run`: aprovado (5 arquivos/20 testes).
+- `git diff --check`: aprovado.
+- Pendentes de sessao autenticada no Preview: DELETE de cliente sem movimentacoes; DELETE de cliente com movimentacoes (confirmar `ON DELETE SET NULL`); tentativa de DELETE de cliente de outra empresa (deve resultar em erro e nenhuma linha afetada). Este ambiente nao possui credenciais de duas empresas nem navegador autenticado para coletar status/corpo HTTP reais.
