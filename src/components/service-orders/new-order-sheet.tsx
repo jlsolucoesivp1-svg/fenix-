@@ -38,13 +38,11 @@ import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs';
 import {
   getCustomers,
   getFinancialTransactions,
-  getServiceOrders,
   getSettings,
   getStock,
   getTenantSettings,
   listTenantCustomers,
   listTenantProducts,
-  listTenantServiceOrders,
   saveFinancialTransactions,
   searchTenantCustomers,
 } from '@/lib/storage';
@@ -57,7 +55,7 @@ import { add } from 'date-fns';
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '../ui/table';
 import { findStockItemForServiceOrderItem, getAvailableStockForDraftItem } from '@/lib/service-order-stock';
 import { resolveServiceOrderStatusFromBalance } from '@/lib/service-order-financial';
-import { formatServiceOrderNumber, getNextSequentialServiceOrderId } from '@/lib/service-order-id';
+import { formatServiceOrderNumber } from '@/lib/service-order-id';
 import { SERVICE_ORDER_PAYMENT_METHODS } from '@/lib/payment-methods';
 import { CustomerAutocomplete } from '@/components/customers/customer-autocomplete';
 import { LocalAutocomplete, highlightMatch } from '@/components/ui/local-autocomplete';
@@ -79,7 +77,6 @@ export function NewOrderSheet({ onNewOrderClick, customer, serviceOrder, isOpen,
   const session = useCurrentAppSession();
   
   const [customers, setCustomers] = React.useState<Customer[]>([]);
-  const [existingOrders, setExistingOrders] = React.useState<ServiceOrder[]>([]);
   const [stock, setStock] = React.useState<StockItem[]>([]);
   const [selectedCustomerId, setSelectedCustomerId] = React.useState<string>('');
   const [reportedProblem, setReportedProblem] = React.useState('');
@@ -111,14 +108,13 @@ export function NewOrderSheet({ onNewOrderClick, customer, serviceOrder, isOpen,
         return;
       }
 
-      const [customersData, stockData, serviceOrdersData] = await Promise.all(
+      const [customersData, stockData] = await Promise.all(
         useSaasServiceOrders
-          ? [listTenantCustomers(), listTenantProducts(), listTenantServiceOrders()]
-          : [getCustomers(), getStock(), getServiceOrders()]
+          ? [listTenantCustomers(), listTenantProducts()]
+          : [getCustomers(), getStock()]
       );
       setCustomers(customersData);
       setStock(stockData);
-      setExistingOrders(serviceOrdersData);
     };
     loadData();
   }, [isOpen, useSaasServiceOrders]);
@@ -314,7 +310,9 @@ export function NewOrderSheet({ onNewOrderClick, customer, serviceOrder, isOpen,
     }
 
     const finalOrder: ServiceOrder = {
-        id: serviceOrder?.id || getNextSequentialServiceOrderId(existingOrders),
+        // Em SaaS o numero visivel e reservado e gravado pela RPC no banco.
+        // Um novo formulario nunca escolhe um numero no navegador.
+        id: serviceOrder?.id || '',
         customerName: selectedCustomer.name,
         customerId: selectedCustomerId,
         equipment: fullEquipmentName,

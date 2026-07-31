@@ -1,5 +1,3 @@
-import type { ServiceOrder } from '@/types';
-
 const NUMERIC_SERVICE_ORDER_ID_PATTERN = /^\d+$/;
 
 export const isSequentialServiceOrderId = (value?: string | null) =>
@@ -16,17 +14,4 @@ export const formatServiceOrderNumber = (value?: string | null) => {
   }
 
   return trimmedValue.slice(-4);
-};
-
-export const getNextSequentialServiceOrderId = (orders: ServiceOrder[]) => {
-  const highestNumericId = orders.reduce((highest, order) => {
-    const currentId = order.id?.trim();
-    if (!isSequentialServiceOrderId(currentId)) {
-      return highest;
-    }
-
-    return Math.max(highest, Number(currentId));
-  }, 0);
-
-  return String(highestNumericId + 1);
 };

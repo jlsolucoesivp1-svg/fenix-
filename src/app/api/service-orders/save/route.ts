@@ -36,7 +36,7 @@ export async function POST(request: Request) {
     const payload = (await request.json()) as SaveServiceOrderPayload;
     const serviceOrder = payload.serviceOrder;
 
-    if (!serviceOrder?.id || !serviceOrder.customerName?.trim()) {
+    if (!serviceOrder?.customerName?.trim()) {
       return NextResponse.json({ error: 'Payload invalido para salvar a OS.' }, { status: 400 });
     }
 
@@ -62,6 +62,10 @@ export async function POST(request: Request) {
 
     const authResult = await requirePermission('accessServiceOrders', 'Voce nao tem permissao para salvar ordens de servico.');
     if (authResult instanceof NextResponse) return authResult;
+
+    if (!serviceOrder.id?.trim()) {
+      return NextResponse.json({ error: 'O modo legado exige identificador da OS.' }, { status: 400 });
+    }
 
     const result = await withTransaction(async (client) => {
       const [orders, stock] = await Promise.all([

@@ -57,6 +57,11 @@ const buildUrl = (
   return `${url}/rest/v1/${table}?${searchParams.toString()}`;
 };
 
+const buildRpcUrl = (functionName: string) => {
+  const { url } = getSupabaseUserConfig();
+  return `${url}/rest/v1/rpc/${functionName}`;
+};
+
 const buildHeaders = (accessToken: string, preferRepresentation = false) => {
   const { anonKey } = getSupabaseUserConfig();
   return {
@@ -160,7 +165,7 @@ const mapServiceOrder = (params: {
   serialNumber: params.record.serial_number || undefined,
 });
 
-const mapServiceOrderInput = (params: { companyId: string; serviceOrder: ServiceOrder }) => {
+const mapServiceOrderInput = (params: { serviceOrder: ServiceOrder }) => {
   const equipmentText = typeof params.serviceOrder.equipment === 'string' ? params.serviceOrder.equipment : '';
   const equipmentParts = equipmentText.trim().split(/\s+/);
   const equipmentType = equipmentParts[0] || '';
@@ -168,8 +173,6 @@ const mapServiceOrderInput = (params: { companyId: string; serviceOrder: Service
   const equipmentModel = equipmentParts.slice(2).join(' ') || '';
 
   return {
-    id: params.serviceOrder.id,
-    company_id: params.companyId,
     customer_id: normalizeOptionalText(params.serviceOrder.customerId),
     customer_name: params.serviceOrder.customerName,
     equipment_summary: equipmentText,
@@ -190,6 +193,32 @@ const mapServiceOrderInput = (params: { companyId: string; serviceOrder: Service
     accessories: normalizeOptionalText(params.serviceOrder.accessories),
     technical_report: normalizeOptionalText(params.serviceOrder.technicalReport),
   };
+};
+
+const createSaasServiceOrder = async (params: {
+  accessToken: string;
+  serviceOrder: ServiceOrder;
+}): Promise<ServiceOrderRecord> => {
+  const response = await fetch(buildRpcUrl('create_saas_service_order'), {
+    method: 'POST',
+    headers: buildHeaders(params.accessToken, true),
+    // A funcao ignora id e company_id: ambos sao definidos no PostgreSQL a
+    // partir do contador e da empresa ativa da sessao autenticada.
+    body: JSON.stringify({ p_order: mapServiceOrderInput({ serviceOrder: params.serviceOrder }) }),
+    cache: 'no-store',
+  });
+
+  if (!response.ok) {
+    throw new Error(await parseErrorMessage(response));
+  }
+
+  const payload = (await response.json()) as ServiceOrderRecord | ServiceOrderRecord[];
+  const createdOrder = Array.isArray(payload) ? payload[0] : payload;
+  if (!createdOrder?.id) {
+    throw new Error('A criacao da ordem de servico nao retornou um identificador.');
+  }
+
+  return createdOrder;
 };
 
 const mapServiceOrderItemsInput = (params: { companyId: string; serviceOrder: ServiceOrder }) =>
@@ -533,13 +562,16 @@ export const saveSaasServiceOrder = async (params: {
   actorDisplayName: string | null;
   serviceOrder: ServiceOrder;
 }): Promise<{ duplicated: boolean; order: ServiceOrder; stock: StockItem[] }> => {
+  const requestedOrderId = params.serviceOrder.id?.trim();
+  const isNewOrder = !requestedOrderId;
   const [currentOrders, currentStock, currentFinancialResponse] = await Promise.all([
     listSaasServiceOrders(params.accessToken),
     listCurrentStock(params.accessToken),
     fetch(
       buildUrl('financial_entries', {
         select: FINANCIAL_ENTRIES_SELECT_FIELDS,
-        related_service_order_id: `eq.${params.serviceOrder.id}`,
+        company_id: `eq.${params.companyId}`,
+        related_service_order_id: `eq.${requestedOrderId || '__new_service_order__'}`,
       }),
       { method: 'GET', headers: buildHeaders(params.accessToken), cache: 'no-store' }
     ),
@@ -551,8 +583,8 @@ export const saveSaasServiceOrder = async (params: {
 
   const currentFinancialRows = (await currentFinancialResponse.json()) as FinancialEntryRecord[];
   const currentFinancialTransactions = currentFinancialRows.map(mapFinancialEntryRecord);
-  const previousOrder = currentOrders.find((order) => order.id === params.serviceOrder.id);
-  const finalOrder: ServiceOrder = { ...params.serviceOrder };
+  const previousOrder = requestedOrderId ? currentOrders.find((order) => order.id === requestedOrderId) : undefined;
+  let finalOrder: ServiceOrder = { ...params.serviceOrder, id: requestedOrderId || '' };
 
   if (finalOrder.status === 'Entregue' && !finalOrder.deliveredDate) {
     finalOrder.deliveredDate = new Date().toISOString().split('T')[0];
@@ -577,35 +609,34 @@ export const saveSaasServiceOrder = async (params: {
     updatedStock: stockSyncResult.updatedStock,
   });
 
-  const patchResponse = await fetch(
-    buildUrl('service_orders', {
-      select: SERVICE_ORDERS_SELECT_FIELDS,
-      id: `eq.${finalOrder.id}`,
-      company_id: `eq.${params.companyId}`,
-    }),
-    {
-      method: 'PATCH',
-      headers: buildHeaders(params.accessToken, true),
-      body: JSON.stringify(mapServiceOrderInput({ companyId: params.companyId, serviceOrder: finalOrder })),
-      cache: 'no-store',
-    }
-  );
-
-  if (!patchResponse.ok) {
-    throw new Error(await parseErrorMessage(patchResponse));
-  }
-
-  const patchedRows = (await patchResponse.json()) as ServiceOrderRecord[];
-  if (!patchedRows[0]) {
-    const insertResponse = await fetch(buildUrl('service_orders', { select: SERVICE_ORDERS_SELECT_FIELDS }), {
-      method: 'POST',
-      headers: buildHeaders(params.accessToken, true),
-      body: JSON.stringify(mapServiceOrderInput({ companyId: params.companyId, serviceOrder: finalOrder })),
-      cache: 'no-store',
+  if (isNewOrder) {
+    const createdOrder = await createSaasServiceOrder({
+      accessToken: params.accessToken,
+      serviceOrder: finalOrder,
     });
+    finalOrder = { ...finalOrder, id: createdOrder.id };
+  } else {
+    const patchResponse = await fetch(
+      buildUrl('service_orders', {
+        select: SERVICE_ORDERS_SELECT_FIELDS,
+        id: `eq.${finalOrder.id}`,
+        company_id: `eq.${params.companyId}`,
+      }),
+      {
+        method: 'PATCH',
+        headers: buildHeaders(params.accessToken, true),
+        body: JSON.stringify(mapServiceOrderInput({ serviceOrder: finalOrder })),
+        cache: 'no-store',
+      }
+    );
 
-    if (!insertResponse.ok) {
-      throw new Error(await parseErrorMessage(insertResponse));
+    if (!patchResponse.ok) {
+      throw new Error(await parseErrorMessage(patchResponse));
+    }
+
+    const patchedRows = (await patchResponse.json()) as ServiceOrderRecord[];
+    if (!patchedRows[0]) {
+      throw new Error('Ordem de servico nao encontrada na empresa ativa.');
     }
   }
 
