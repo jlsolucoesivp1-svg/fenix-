@@ -80,6 +80,8 @@ export function NewOrderSheet({ onNewOrderClick, customer, serviceOrder, isOpen,
   
   const [newItem, setNewItem] = React.useState({ description: '', quantity: 1, unitPrice: 0, type: 'service' as 'service' | 'part' });
   const [openCombobox, setOpenCombobox] = React.useState(false);
+  const [partSearch, setPartSearch] = React.useState('');
+  const [debouncedPartSearch, setDebouncedPartSearch] = React.useState('');
 
   const isEditing = !!serviceOrder;
   
@@ -94,6 +96,32 @@ export function NewOrderSheet({ onNewOrderClick, customer, serviceOrder, isOpen,
     };
     loadData();
   }, []);
+
+  React.useEffect(() => {
+    const timeoutId = window.setTimeout(() => {
+      setDebouncedPartSearch(partSearch);
+    }, 300);
+
+    return () => window.clearTimeout(timeoutId);
+  }, [partSearch]);
+
+  const filteredStockForPartSearch = React.useMemo(() => {
+    const search = debouncedPartSearch.trim().toLocaleLowerCase();
+    if (!search) return stock;
+
+    return stock.filter((stockItem) => {
+      const searchableFields = [
+        stockItem.name,
+        stockItem.barcode,
+        stockItem.category,
+        stockItem.description,
+      ];
+
+      return searchableFields.some((field) =>
+        String(field ?? '').toLocaleLowerCase().includes(search)
+      );
+    });
+  }, [stock, debouncedPartSearch]);
 
   React.useEffect(() => {
     const loadWarranty = async () => {
@@ -176,6 +204,7 @@ export function NewOrderSheet({ onNewOrderClick, customer, serviceOrder, isOpen,
 
     setItems([...items, { ...newItem, id: Date.now() }]);
     setNewItem({ description: '', quantity: 1, unitPrice: 0, type: 'service' });
+    setPartSearch('');
   };
 
   const confirmManualAdd = () => {
@@ -183,6 +212,7 @@ export function NewOrderSheet({ onNewOrderClick, customer, serviceOrder, isOpen,
       setItems([...items, manualAddItem]);
     }
     setNewItem({ description: '', quantity: 1, unitPrice: 0, type: 'service' });
+    setPartSearch('');
     setIsManualAddDialogOpen(false);
     setManualAddItem(null);
   };
@@ -447,15 +477,15 @@ export function NewOrderSheet({ onNewOrderClick, customer, serviceOrder, isOpen,
                                               </Button>
                                           </PopoverTrigger>
                                           <PopoverContent className="w-[--radix-popover-trigger-width] p-0">
-                                              <Command>
-                                                  <CommandInput placeholder="Procurar peça..." value={newItem.description} onValueChange={(search) => setNewItem({...newItem, description: search })}/>
+                                              <Command shouldFilter={false}>
+                                                  <CommandInput placeholder="Procurar peça..." value={partSearch} onValueChange={setPartSearch}/>
                                                   <CommandList>
                                                       <CommandEmpty>Nenhuma peça encontrada.</CommandEmpty>
                                                       <CommandGroup>
-                                                          {stock.map((stockItem) => (
-                                                              <CommandItem key={stockItem.id} value={stockItem.name} onSelect={(currentValue) => {
-                                                                      const selected = stock.find(s => s.name.toLowerCase() === currentValue.toLowerCase());
-                                                                      if (selected) { setNewItem({ ...newItem, description: selected.name, unitPrice: selected.price }); }
+                                                          {filteredStockForPartSearch.map((stockItem) => (
+                                                              <CommandItem key={stockItem.id} value={stockItem.name} onSelect={() => {
+                                                                      setNewItem({ ...newItem, description: stockItem.name, unitPrice: stockItem.price });
+                                                                      setPartSearch(stockItem.name);
                                                                       setOpenCombobox(false);
                                                                   }}>
                                                                   <Check className={cn("mr-2 h-4 w-4", newItem.description.toLowerCase() === stockItem.name.toLowerCase() ? "opacity-100" : "opacity-0")} />
@@ -469,7 +499,7 @@ export function NewOrderSheet({ onNewOrderClick, customer, serviceOrder, isOpen,
                                       </Popover>
                                   ) : ( <Input id="newItemDescription" placeholder="Ex: Formatação" value={newItem.description} onChange={e => setNewItem({...newItem, description: e.target.value})} /> )}
                               </div>
-                              <div className="w-28"><Label className="text-xs">Tipo</Label><Select value={newItem.type} onValueChange={(value: 'service' | 'part') => setNewItem({...newItem, type: value, description: '', unitPrice: 0 })}><SelectTrigger><SelectValue /></SelectTrigger><SelectContent><SelectItem value="service">Serviço</SelectItem><SelectItem value="part">Peça</SelectItem></SelectContent></Select></div>
+                              <div className="w-28"><Label className="text-xs">Tipo</Label><Select value={newItem.type} onValueChange={(value: 'service' | 'part') => { setNewItem({...newItem, type: value, description: '', unitPrice: 0 }); setPartSearch(''); }}><SelectTrigger><SelectValue /></SelectTrigger><SelectContent><SelectItem value="service">Serviço</SelectItem><SelectItem value="part">Peça</SelectItem></SelectContent></Select></div>
                               <div className="w-16"><Label htmlFor="newItemQty" className="text-xs">Qtd</Label><Input id="newItemQty" type="number" value={newItem.quantity} onChange={e => setNewItem({...newItem, quantity: parseInt(e.target.value, 10) || 1})} /></div>
                               <div className="w-24"><Label htmlFor="newItemPrice" className="text-xs">Valor R$</Label><CurrencyInput id="newItemPrice" value={newItem.unitPrice} onValueChange={(val) => setNewItem({...newItem, unitPrice: val})} disabled={newItem.type === 'part'} /></div>
                               <Button onClick={handleAddItem} size="sm">Adicionar</Button>
